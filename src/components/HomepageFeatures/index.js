@@ -7,7 +7,7 @@ const FeatureList = [
   {
     title: 'Automated Trading',
     image: require('@site/static/img/undraw_docusaurus_mountain.png').default,
-    link: '/docs/youtube-code/',
+    link: '/docs/youtube-code/video-1-mlma',
     description: (
       <>
         Build and deploy automated trading strategies that execute trades 24/7
