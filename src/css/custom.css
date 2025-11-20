@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
 /**
  * Any CSS included here will be global. The classic template
  * bundles Infima by default. Infima is a CSS framework designed to
@@ -34,9 +36,257 @@
 pre[class*="language-"],
 code[class*="language-"] {
   background-color: #000000 !important;
+  white-space: pre !important;
+  overflow-x: auto !important;
+  word-wrap: normal !important;
+  word-break: normal !important;
 }
 
 /* Code block container */
 .theme-code-block {
   background-color: #000000 !important;
+  position: relative;
+}
+
+/* Add padding to code content to prevent overlap with buttons */
+.theme-code-block pre {
+  padding-top: 3rem !important;
+  padding-right: 1rem !important;
+}
+
+/* Hide the word wrap toggle button */
+.theme-code-block button[title="Toggle word wrap"],
+.theme-code-block button[aria-label="Toggle word wrap"],
+button[class*="wordWrapButton"],
+button.wordWrapButtonEnabled_uzNF,
+button.clean-btn[aria-label="Toggle word wrap"] {
+  display: none !important;
+  visibility: hidden !important;
+  width: 0 !important;
+  height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Disable text wrapping in code blocks */
+.theme-code-block pre,
+.theme-code-block code {
+  white-space: pre !important;
+  word-wrap: normal !important;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+}
+
+/* Make copy code button always visible with text */
+.theme-code-block .theme-code-block-highlighted-line {
+  background-color: rgba(0, 0, 0, 0.3);
+}
+
+/* Code block buttons container - always show */
+.theme-code-block-button-group {
+  opacity: 1 !important;
+}
+
+/* Copy button styling - always visible */
+.theme-code-block button[class*="copyButton"],
+.theme-code-block button.clean-btn {
+  opacity: 1 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  padding: 8px 12px !important;
+  background-color: rgba(30, 30, 30, 0.8) !important; /* Darker background for contrast */
+  border-radius: 6px !important;
+  transition: all 0.2s ease !important;
+  position: relative !important;
+  overflow: hidden !important; /* Changed back to hidden to contain the pseudo-element correctly */
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); /* Initial shadow state */
+}
+
+.theme-code-block button[class*="copyButton"]:hover,
+.theme-code-block button.clean-btn:hover {
+  background-color: rgba(40, 40, 40, 0.9) !important;
+  box-shadow: 0 0 15px rgba(59, 130, 246, 0.5) !important; /* Glow on hover */
+  border-color: rgba(59, 130, 246, 0.5) !important;
+}
+
+/* Traveling light effect using a pseudo-element */
+.theme-code-block button[class*="copyButton"]::after,
+.theme-code-block button.clean-btn::after {
+  content: '' !important;
+  position: absolute !important;
+  top: 0 !important;
+  left: -100% !important;
+  width: 50% !important;
+  height: 100% !important;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.2),
+    rgba(59, 130, 246, 0.5),
+    rgba(255, 255, 255, 0.2),
+    transparent
+  ) !important;
+  transform: skewX(-25deg) !important;
+  animation: shine-travel 3s infinite !important;
+  pointer-events: none !important;
+}
+
+@keyframes shine-travel {
+  0% {
+    left: -100%;
+  }
+  20% {
+    left: 200%;
+  }
+  100% {
+    left: 200%;
+  }
+}
+
+/* Show "Copy code" text always */
+.theme-code-block button[class*="copyButton"]::before,
+.theme-code-block button.clean-btn[aria-label*="Copy"]::before {
+  content: "Copy code" !important;
+  margin-right: 4px !important;
+  font-size: 14px !important;
+  color: rgba(255, 255, 255, 0.8) !important;
+}
+
+/* Highlight copy button when user tries to interact with code block */
+/* Only trigger when container is active but button is NOT being hovered/active */
+.theme-code-block:active button[class*="copyButton"]:not(:hover):not(:active),
+.theme-code-block:active button.clean-btn:not(:hover):not(:active) {
+  background-color: rgba(59, 130, 246, 0.8) !important;
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.8) !important;
+  transform: scale(1.05);
+  border-color: #60a5fa !important;
+}
+
+/* Show "Click here to copy entire code" only when user clicks the code block */
+/* Only trigger when container is active but button is NOT being hovered/active */
+.theme-code-block:active button[class*="copyButton"]:not(:hover):not(:active)::before,
+.theme-code-block:active button.clean-btn[aria-label*="Copy"]:not(:hover):not(:active)::before {
+  content: "Click here to copy entire code" !important;
+  color: #fff !important;
+  font-weight: bold !important;
+}
+
+/* Collapsible Code Block Styling */
+details.code-block-collapsible {
+  margin-bottom: var(--ifm-leading);
+  background-color: var(--ifm-background-color);
+  border: 1px solid var(--ifm-color-emphasis-200);
+  border-radius: var(--ifm-code-border-radius);
+  overflow: hidden;
+}
+
+details.code-block-collapsible > summary.code-block-summary {
+  padding: 0.75rem 1rem;
+  font-weight: bold;
+  cursor: pointer;
+  background-color: var(--ifm-background-surface-color);
+  border-bottom: 1px solid var(--ifm-color-emphasis-200);
+  display: flex;
+  align-items: center;
+  list-style: none;
+}
+
+details.code-block-collapsible[open] > summary.code-block-summary {
+  border-bottom: 1px solid var(--ifm-color-emphasis-200);
+}
+
+details.code-block-collapsible:not([open]) > summary.code-block-summary {
+  border-bottom: none;
+}
+
+/* Hide default marker */
+details.code-block-collapsible > summary.code-block-summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Custom arrow */
+details.code-block-collapsible > summary.code-block-summary::before {
+  content: '';
+  display: inline-block;
+  width: 0; 
+  height: 0; 
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 6px solid currentColor;
+  transform: rotate(-90deg);
+  margin-right: 10px;
+  transition: transform 0.2s ease;
+}
+
+details.code-block-collapsible[open] > summary.code-block-summary::before {
+  transform: rotate(0deg);
+}
+
+/* Adjust code block inside details */
+details.code-block-collapsible .theme-code-block {
+  margin-bottom: 0 !important;
+  border-radius: 0 !important;
+  border-top: none !important;
+}
+
+details.code-block-collapsible .theme-code-block pre {
+  border-radius: 0 !important;
+}
+
+/* Auto-collapsible long code blocks */
+.code-block-wrapper {
+  position: relative;
+  margin-bottom: var(--ifm-leading);
+  border-radius: var(--ifm-code-border-radius);
+  overflow: hidden;
+}
+
+.code-block-content.collapsed {
+  max-height: 450px; /* Show enough context before cutting off */
+  overflow: hidden;
+}
+
+/* Ensure the inner CodeBlock doesn't add margin that messes up our wrapper */
+.code-block-wrapper .theme-code-block {
+  margin-bottom: 0 !important;
+}
+
+.code-block-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 120px;
+  background: linear-gradient(to bottom, transparent 0%, #000000 70%);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 20px;
+  z-index: 5;
+  border-bottom-left-radius: var(--ifm-code-border-radius);
+  border-bottom-right-radius: var(--ifm-code-border-radius);
+}
+
+.expand-button {
+  background-color: rgba(30, 30, 30, 0.9);
+  color: var(--ifm-color-content);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  padding: 8px 24px;
+  font-size: 0.9rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.expand-button:hover {
+  background-color: var(--ifm-color-primary);
+  color: white;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(var(--ifm-color-primary-rgb), 0.4);
 }

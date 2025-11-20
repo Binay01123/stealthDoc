@@ -2,6 +2,9 @@
   "label": "YouTube Series",
   "position": 1,
   "collapsible": true,
-  "collapsed": false
+  "collapsed": false,
+  "link": {
+    "type": "generated-index",
+    "description": "Explore the code and resources from our YouTube series on automated trading."
+  }
 }
-

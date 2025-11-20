@@ -5,12 +5,52 @@
   width: 100%;
 }
 
+.featureCard {
+  height: 100%;
+  padding: 2rem;
+  border-radius: 1rem;
+  background: var(--ifm-card-background-color);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+  border: 1px solid var(--ifm-color-emphasis-200);
+}
+
+.featureCard:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  border-color: var(--ifm-color-primary);
+}
+
+.featureLink {
+  text-decoration: none !important;
+  color: inherit !important;
+  display: block;
+  height: 100%;
+}
+
+.featureLink:hover {
+  text-decoration: none !important;
+  color: inherit !important;
+}
+
 .featureSvg {
   height: 200px;
   width: 200px;
+  margin-bottom: 1.5rem;
 }
 
 .featureSvgWide {
   height: 200px;
   width: 300px;
+  margin-bottom: 1.5rem;
+}
+
+.featureTitle {
+  margin-bottom: 1rem;
+  color: var(--ifm-color-primary);
+}
+
+.featureDescription {
+  color: var(--ifm-color-content-secondary);
+  line-height: 1.6;
 }

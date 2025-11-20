@@ -6,16 +6,50 @@ import HomepageFeatures from '@site/src/components/HomepageFeatures';
 
 import Heading from '@theme/Heading';
 import styles from './index.module.css';
+import Shuffle from '@site/src/components/Shuffle';
+import LetterGlitch from '@site/src/components/LetterGlitch';
+import DecryptedText from '@site/src/components/DecryptedText';
 
 function HomepageHeader() {
   const {siteConfig} = useDocusaurusContext();
+  const titleWords = siteConfig.title.replace(/([A-Z])/g, ' $1').trim();
+  
   return (
     <header className={clsx('hero hero--primary', styles.heroBanner)}>
-      <div className="container">
-        <Heading as="h1" className="hero__title">
-          {siteConfig.title}
-        </Heading>
-        <p className="hero__subtitle">{siteConfig.tagline}</p>
+      <div className={styles.glitchBackground}>
+        <LetterGlitch
+          glitchSpeed={50}
+          centerVignette={true}
+          outerVignette={false}
+          smooth={true}
+          glitchColors={['#2b4539', '#61dca3', '#61b3dc']}
+        />
+      </div>
+      <div className={clsx('container', styles.heroContent)}>
+        <div className={styles.heroTitle}>
+          <Shuffle 
+            text={titleWords}
+            shuffleDirection="right"
+            duration={0.35}
+            animationMode="evenodd"
+            shuffleTimes={1}
+            ease="power3.out"
+            stagger={0.03}
+            threshold={0.1}
+            triggerOnce={true}
+            triggerOnHover={true}
+            respectReducedMotion={true}
+          />
+        </div>
+        <p className="hero__subtitle">
+          <DecryptedText
+            text={siteConfig.tagline}
+            animateOn="view"
+            revealDirection="center"
+            className={styles.decryptedSubtitle}
+            encryptedClassName={styles.decryptedSubtitle}
+          />
+        </p>
         <div className={styles.buttons}>
           <Link
             className="button button--secondary button--lg"

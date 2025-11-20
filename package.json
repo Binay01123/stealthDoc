@@ -17,8 +17,11 @@
     "@docusaurus/core": "3.9.2",
     "@docusaurus/preset-classic": "3.9.2",
     "@giscus/react": "^3.1.0",
+    "@gsap/react": "^2.1.2",
     "@mdx-js/react": "^3.0.0",
     "clsx": "^2.0.0",
+    "gsap": "^3.13.0",
+    "motion": "^12.23.24",
     "prism-react-renderer": "^2.3.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

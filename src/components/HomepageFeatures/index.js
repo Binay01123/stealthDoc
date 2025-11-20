@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import Link from '@docusaurus/Link';
 import Heading from '@theme/Heading';
 import styles from './styles.module.css';
 
@@ -6,16 +7,18 @@ const FeatureList = [
   {
     title: 'Automated Trading',
     image: require('@site/static/img/undraw_docusaurus_mountain.png').default,
+    link: '/docs/youtube-code/',
     description: (
       <>
         Build and deploy automated trading strategies that execute trades 24/7
-        without manual intervention. Let algorithms work for you around the clock.
+        without manual intervention. Access code from our YouTube series.
       </>
     ),
   },
   {
     title: 'Process Over Profit',
     image: require('@site/static/img/undraw_docusaurus_tree.png').default,
+    link: 'https://www.youtube.com/@ProcessOverProfitHQ',
     description: (
       <>
         Focus on building robust trading processes and systems. Consistent,
@@ -35,9 +38,9 @@ const FeatureList = [
   },
 ];
 
-function Feature({image, title, description, isWide}) {
-  return (
-    <div className={clsx('col col--4')}>
+function Feature({image, title, description, isWide, link}) {
+  const CardContent = () => (
+    <div className={styles.featureCard}>
       <div className="text--center">
         <img 
           src={image} 
@@ -47,9 +50,21 @@ function Feature({image, title, description, isWide}) {
         />
       </div>
       <div className="text--center padding-horiz--md">
-        <Heading as="h3">{title}</Heading>
-        <p>{description}</p>
+        <Heading as="h3" className={styles.featureTitle}>{title}</Heading>
+        <p className={styles.featureDescription}>{description}</p>
       </div>
+    </div>
+  );
+
+  return (
+    <div className={clsx('col col--4')}>
+      {link ? (
+        <Link to={link} className={styles.featureLink}>
+          <CardContent />
+        </Link>
+      ) : (
+        <CardContent />
+      )}
     </div>
   );
 }

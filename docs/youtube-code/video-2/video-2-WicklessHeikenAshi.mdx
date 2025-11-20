@@ -1,0 +1,232 @@
+---
+id: video-2-WicklessHeikenAshi
+title: Video-2 Wickless Heiken Ashi
+sidebar_label: Video-2 Wickless Heiken Ashi
+sidebar_position: 3
+slug: /youtube-code/video-2-WicklessHeikenAshi
+draft: true
+---
+
+
+# Video-2 Wickless Heiken Ashi
+
+This walkthrough shows how to automate trades by pairing TradingView’s Wickless Heiken Ashi script with NightShark and Tradovate. Copy the Pine Script into TradingView, attach it to a clean chart, and inspect replay signals. Load the NightShark script, map buy, sell, and neutral zones, then mirror orders to Tradovate while considering risk controls and expanded monitoring for ongoing insights.
+
+<!--
+## YouTube Video
+
+<div style={{textAlign: 'center', margin: '2rem 0'}}>
+  <iframe
+    width="100%"
+    height="617"
+    src="https://www.youtube.com/embed/yKKjG_o63u4"
+    title="YouTube video player"
+    frameBorder="0"
+    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+    allowFullScreen
+    style={{maxWidth: '1097px', width: '100%', aspectRatio: '16/9', border: 'none'}}>
+  </iframe>
+</div>
+-->
+
+
+## Screen Map
+
+![Screen map showing TradingView, NightShark, and Tradovate](./2025-11-17-00-28-44.png)
+
+## Indicator Code
+
+```python title="Wickless Heiken Ashi" collapse
+//@version=6
+indicator("BUY/SELL Wickless Heikin – Closed Candle Mode", overlay = true)
+
+calculate_heikin_ashi() =>
+    var float ha_open = 0.0
+    ha_close = (open + high + low + close) / 4
+    ha_open := na(ha_open[1]) ? (open + close) / 2 : (ha_open[1] + ha_close[1]) / 2
+    ha_high = math.max(high, math.max(ha_open, ha_close))
+    ha_low  = math.min(low,  math.min(ha_open, ha_close))
+    [ha_open, ha_close, ha_high, ha_low]
+
+[haOpen, haClose, haHigh, haLow] = calculate_heikin_ashi()
+
+// ===============================
+// Inputs
+// ===============================
+maxBullLowerWickPct = input.float(1.0, "Max lower wick for Bull (%)", minval = 0.0, maxval = 5.0, step = 0.1)
+maxBearUpperWickPct = input.float(1.0, "Max upper wick for Bear (%)", minval = 0.0, maxval = 5.0, step = 0.1)
+lockModeEnabled     = input.bool(true, "Enable one-shot lock mode")
+showExtendedLines   = input.bool(true, "Show extended lines")
+anchorOffsetBars    = input.int(0, "Anchor offset (bars)", minval = 0, maxval = 50)
+
+bullLineColor = input.color(color.new(color.lime, 0), "Bull line color")
+bearLineColor = input.color(color.new(color.red,  0), "Bear line color")
+
+// ===============================
+// Tolerances
+// ===============================
+haBarRange         = math.max(haHigh - haLow, 0.0)
+epsilonTick        = syminfo.mintick * 0.5
+lowerWickTolerance = haBarRange * (maxBullLowerWickPct / 100.0) + epsilonTick
+upperWickTolerance = haBarRange * (maxBearUpperWickPct / 100.0) + epsilonTick
+
+// Raw Signals (same logic)
+isHeikinAshiBullish           = haClose >= haOpen
+isHeikinAshiBearish           = haClose <  haOpen
+hasNoLowerWickWithinTolerance = math.min(haOpen, haClose) - haLow <= lowerWickTolerance
+hasNoUpperWickWithinTolerance = haHigh - math.max(haOpen, haClose) <= upperWickTolerance
+
+rawBullSignal      = isHeikinAshiBullish and hasNoLowerWickWithinTolerance
+rawBearSignal      = isHeikinAshiBearish and hasNoUpperWickWithinTolerance
+conflictingSignals = rawBullSignal and rawBearSignal
+
+// ===============================
+// Lock regime + triggers (closed bars only)
+// ===============================
+var int lockRegime = 0
+var bool bullTrigger = false
+var bool bearTrigger = false
+
+if barstate.isconfirmed
+    bullTrigger := (lockModeEnabled ? (rawBullSignal and lockRegime != 1) : rawBullSignal) and not conflictingSignals
+    bearTrigger := (lockModeEnabled ? (rawBearSignal and lockRegime != -1) : rawBearSignal) and not conflictingSignals
+
+    if lockModeEnabled
+        if bullTrigger
+            lockRegime := 1
+        else if bearTrigger
+            lockRegime := -1
+
+// ===============================
+// Last Signal Levels (closed bar only)
+// ===============================
+var float lastBullLevel = na
+var float lastBearLevel = na
+
+if barstate.isconfirmed
+    if bullTrigger
+        lastBullLevel := haOpen
+    if bearTrigger
+        lastBearLevel := haOpen
+
+// ===============================
+// Extended Lines
+// ===============================
+var line bullExtLine = line.new(na, na, na, na, color = bullLineColor, style = line.style_dashed, extend = extend.right)
+var line bearExtLine = line.new(na, na, na, na, color = bearLineColor, style = line.style_dashed, extend = extend.right)
+
+line.set_extend(bullExtLine, showExtendedLines ? extend.right : extend.none)
+line.set_extend(bearExtLine, showExtendedLines ? extend.right : extend.none)
+
+if barstate.isconfirmed and showExtendedLines and bullTrigger and not na(lastBullLevel)
+    anchorX1 = bar_index - anchorOffsetBars
+    line.set_xy1(bullExtLine, anchorX1,     lastBullLevel)
+    line.set_xy2(bullExtLine, anchorX1 + 1, lastBullLevel)
+
+if barstate.isconfirmed and showExtendedLines and bearTrigger and not na(lastBearLevel)
+    anchorX1 = bar_index - anchorOffsetBars
+    line.set_xy1(bearExtLine, anchorX1,     lastBearLevel)
+    line.set_xy2(bearExtLine, anchorX1 + 1, lastBearLevel)
+
+// ===============================
+// Plot BUY/SELL
+// ===============================
+plotshape(bullTrigger, title = "Bull", style = shape.triangleup,   location = location.belowbar, color = color.green, size = size.tiny, text = "B")
+plotshape(bearTrigger, title = "Bear", style = shape.triangledown, location = location.abovebar, color = color.red,   size = size.tiny, text = "S")
+
+// ===============================
+// Regime background
+// ===============================
+bg = lockModeEnabled ? (lockRegime == 1 ? color.new(color.green,92) : lockRegime == -1 ? color.new(color.red,92) : na) : na
+bgcolor(bg)
+
+// ===============================
+// Trend classification for signal table
+// ===============================
+bullish = lockModeEnabled ? lockRegime == 1 : bullTrigger
+bearish = lockModeEnabled ? lockRegime == -1 : bearTrigger
+exit    = not bullish and not bearish
+signal  = bullish ? "BUY" : bearish ? "SELL" : exit ? "EXIT" : "NONE"
+
+baseLine = na(haClose) ? close : haClose
+
+// Wave fill
+pBull = plot(bullish ? baseLine : na, title = "Bull Wave", color = color.new(color.blue, 60), linewidth = 2)
+pBear = plot(bearish ? baseLine : na, title = "Bear Wave", color = color.new(color.red, 60), linewidth = 2)
+fill(pBull, pBear, color = bullish ? color.new(color.blue,70) : color.new(color.red,70))
+
+// Trend-change dot
+var int os = na
+os := bullish ? 1 : bearish ? 0 : os[1]
+plot(os != os[1] ? baseLine : na, title = "Trend Change", style = plot.style_circles, linewidth = 3, color = os == 1 ? color.blue : color.red)
+
+// ===============================
+// Top-right signal table
+// ===============================
+var table signalTable = table.new(position.top_right, 2, 1, border_width = 1)
+
+bgColor   = bullish ? color.green : bearish ? color.red : exit ? color.orange : color.white
+textColor = (bullish or bearish or exit) ? color.white : color.black
+
+table.cell(signalTable, 0, 0, "SIGNAL", text_color = color.white, text_size = size.large, bgcolor = color.gray)
+table.cell(signalTable, 1, 0, signal, text_color = textColor, text_size = size.large, bgcolor = bgColor)
+
+```
+
+## Nightshark Code
+
+```javascript
+;Wickless Heiken Ashi Code
+
+
+StopScript() {
+    Send, {F2}
+}
+
+BUY_condition() {
+    global
+    return (area[1] ~= "BUY")
+}
+
+SELL_condition() {
+    global
+    return (area[1] ~= "SELL")
+}
+
+longPosition:= 0
+shortPosition := 0
+loop {
+    loop{
+    read_areas()
+    } until (BUY_condition() || SELL_condition() )
+
+    if(BUY_condition() && longPosition <> 1) {
+        if(shortPosition = 1) {
+            click(point.a)
+            shortPosition:= 0
+            click(point.c)
+        }
+        else {
+            click(point.a)
+            longPosition := 1
+            click(point.c)
+        }
+    }
+
+    else if(SELL_condition() && shortPosition <> 1 ) {
+        if(longPosition = 1) {
+            click(point.b)
+            longPosition := 0
+            click(point.c)
+        }
+        else {
+            click(point.b)
+            shortPosition := 1
+            click(point.c)
+        }
+    }
+}
+```
+
+---
+
