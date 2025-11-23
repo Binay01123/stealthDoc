@@ -4,7 +4,6 @@ title: Video-2 Wickless Heiken Ashi
 sidebar_label: Video-2 Wickless Heiken Ashi
 sidebar_position: 3
 slug: /youtube-code/video-2-WicklessHeikenAshi
-draft: true
 ---
 
 
@@ -12,9 +11,9 @@ draft: true
 
 This walkthrough shows how to automate trades by pairing TradingView’s Wickless Heiken Ashi script with NightShark and Tradovate. Copy the Pine Script into TradingView, attach it to a clean chart, and inspect replay signals. Load the NightShark script, map buy, sell, and neutral zones, then mirror orders to Tradovate while considering risk controls and expanded monitoring for ongoing insights.
 
-<!--
-## YouTube Video
+## YouTube Video (coming soon)
 
+<!--
 <div style={{textAlign: 'center', margin: '2rem 0'}}>
   <iframe
     width="100%"
@@ -29,14 +28,13 @@ This walkthrough shows how to automate trades by pairing TradingView’s Wickles
 </div>
 -->
 
-
 ## Screen Map
 
-![Screen map showing TradingView, NightShark, and Tradovate](./2025-11-17-00-28-44.png)
+![Screen map showing TradingView, NightShark, and Tradovate](./2025-11-23-16-12-26.png)
 
 ## Indicator Code
 
-```python title="Wickless Heiken Ashi" collapse
+```python
 //@version=6
 indicator("BUY/SELL Wickless Heikin – Closed Candle Mode", overlay = true)
 
@@ -178,54 +176,96 @@ table.cell(signalTable, 1, 0, signal, text_color = textColor, text_size = size.l
 ```javascript
 ;Wickless Heiken Ashi Code
 
+global TakeProfit := 500 ;This is your take profit level
+global StopLoss := -500 ; This is your stop loss level
 
-StopScript() {
-    Send, {F2}
+Skip_First_signal := true ; Set to true to skip the first signal after starting the script
+
+
+BUY_Condition() {
+    return area[1] ~= "BUY"
 }
 
-BUY_condition() {
-    global
-    return (area[1] ~= "BUY")
+SELL_Condition() {
+    return area[1] ~= "SELL"
 }
 
-SELL_condition() {
-    global
-    return (area[1] ~= "SELL")
+PnL_Exit(openPL) {
+    return openPL >= TakeProfit || openPL <= StopLoss
 }
 
-longPosition:= 0
-shortPosition := 0
-loop {
-    loop{
-    read_areas()
-    } until (BUY_condition() || SELL_condition() )
+click(point.c)
 
-    if(BUY_condition() && longPosition <> 1) {
-        if(shortPosition = 1) {
-            click(point.a)
-            shortPosition:= 0
-            click(point.c)
-        }
-        else {
-            click(point.a)
-            longPosition := 1
-            click(point.c)
-        }
+if(Skip_First_signal) {
+    read_areas() 
+    if (BUY_Condition()) {
+        Log("Skipping first BUY signal, waiting for SELL signal")
+        loop{
+            read_areas()
+        } Until (SELL_Condition()) 
     }
-
-    else if(SELL_condition() && shortPosition <> 1 ) {
-        if(longPosition = 1) {
-            click(point.b)
-            longPosition := 0
-            click(point.c)
-        }
-        else {
-            click(point.b)
-            shortPosition := 1
-            click(point.c)
-        }
+    else if (SELL_Condition()) {
+        Log("Skipping first SELL signal, waiting for BUY signal")
+        loop{
+            read_areas()        
+        } Until (BUY_Condition())
     }
 }
+loop 
+{
+    Log("Waiting for BUY or SELL signal...")
+    loop {
+        read_areas()
+        sleep 500
+    } until (BUY_Condition() || SELL_Condition())
+
+    if (BUY_Condition()) {
+        Log("BUY signal detected ! Entered Long Position")
+        click(point.a)
+        sleep 500
+        click(point.c)
+
+        loop {
+            read_areas()
+            openPL := toNumber(area[2])
+            openPL += 0
+        } until (SELL_Condition() || PnL_Exit(openPL)) 
+
+        if(SELL_Condition()) {
+            Log("Long Closed due to SELL condition")
+        }
+        else if(PnL_Exit(openPL)) {
+            Log("Long Closed due to PnL Exit: " + openPL)
+        }
+        click(point.b)
+        sleep 500
+        click(point.c)
+    }
+
+    else if (SELL_Condition()) {
+        Log("SELL signal detected ! Entered SHORT Position")
+        click(point.b)
+        sleep 500
+        click(point.c)
+
+        loop {
+            read_areas()
+            openPL := toNumber(area[2])
+            openPL += 0
+        } until (BUY_Condition() || PnL_Exit(openPL) )
+
+        if(BUY_Condition()) {
+            Log("Short Closed due to BUY condition")
+        }
+        else if(PnL_Exit(openPL)) {
+            Log("Short Closed due to PnL Exit: " + openPL)
+        }
+        click(point.a)
+        sleep 500
+        click(point.c)
+    }
+}
+
 ```
 
 ---
