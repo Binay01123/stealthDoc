@@ -174,8 +174,6 @@ table.cell(signalTable, 1, 0, signal, text_color = textColor, text_size = size.l
 ## Nightshark Code
 
 ```javascript
-;Wickless Heiken Ashi Code
-
 global TakeProfit := 500 ;This is your take profit level
 global StopLoss := -500 ; This is your stop loss level
 
@@ -211,12 +209,13 @@ if(Skip_First_signal) {
         } Until (BUY_Condition())
     }
 }
+
 loop 
 {
     Log("Waiting for BUY or SELL signal...")
     loop {
         read_areas()
-        sleep 500
+        sleep 100 ; reduce polling CPU usage
     } until (BUY_Condition() || SELL_Condition())
 
     if (BUY_Condition()) {
@@ -236,6 +235,11 @@ loop
         }
         else if(PnL_Exit(openPL)) {
             Log("Long Closed due to PnL Exit: " + openPL)
+            Log("==on Hold until new SELL signal==")
+            loop {
+                read_areas()
+                sleep 100 ; reduce polling CPU usage
+            } Until SELL_Condition()
         }
         click(point.b)
         sleep 500
@@ -259,12 +263,18 @@ loop
         }
         else if(PnL_Exit(openPL)) {
             Log("Short Closed due to PnL Exit: " + openPL)
+            Log("== on Hold until new BUY signal ==")
+            loop {
+                read_areas()
+                sleep 100 ;reduce polling CPU usage
+            } Until BUY_Condition()
         }
         click(point.a)
         sleep 500
         click(point.c)
     }
 }
+
 
 ```
 
