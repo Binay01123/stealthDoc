@@ -4,7 +4,7 @@ title: Video-3 SuperTrend
 sidebar_label: Video-3 SuperTrend
 sidebar_position: 4
 slug: /youtube-code/video-3-SuperTrend
-draft: true
+
 ---
 
 <!--
@@ -42,7 +42,8 @@ This walkthrough shows how to automate trades by pairing TradingView’s SuperTr
 
 ## Screen Map
 
-![Screen map showing TradingView, NightShark, and Tradovate](./2025-11-17-00-28-44.png)
+![Screen map showing TradingView, NightShark, and Tradovate](./2025-12-04-22-08-43.png)
+
 
 ## Indicator Code
 
@@ -158,69 +159,116 @@ repainting = hasLookahead or hasFutureRef or usesFuture
 // Bottom-right repainting disclosure
 if repainting
     var table warningTable = table.new(position.bottom_right, 1, 1)
-    table.cell(
-        warningTable, 0, 0,
-        "This indicator may repaint.\nBacktesting may be inaccurate.",
-        text_color = color.red,
-        text_size = size.large,
-        bgcolor = color.new(color.white, 80)
-    )
+    table.cell(warningTable, 0, 0,"This indicator may repaint.\nBacktesting may be inaccurate.",text_color = color.red,text_size = size.large,bgcolor = color.new(color.white, 80))
+
 
 ```
 
 ## Nightshark Code
 
 ```javascript
-;SuperTrend Code
+global TakeProfit := 500 ;This is your take profit level
+global StopLoss := -500 ; This is your stop loss level
+
+Skip_First_signal := true ; Set to true to skip the first signal after starting the script
 
 
-StopScript() {
-    Send, {F2}
+BUY_Condition() {
+    return area[1] ~= "BUY"
 }
 
-BUY_condition() {
-    global
-    return (area[1] ~= "BUY")
+SELL_Condition() {
+    return area[1] ~= "SELL"
 }
 
-SELL_condition() {
-    global
-    return (area[1] ~= "SELL")
+PnL_Exit(openPL) {
+    return openPL >= TakeProfit || openPL <= StopLoss
 }
 
-longPosition:= 0
-shortPosition := 0
-loop {
-    loop{
-    read_areas()
-    } until (BUY_condition() || SELL_condition() )
+click(point.c)
 
-    if(BUY_condition() && longPosition <> 1) {
-        if(shortPosition = 1) {
-            click(point.a)
-            shortPosition:= 0
-            click(point.c)
-        }
-        else {
-            click(point.a)
-            longPosition := 1
-            click(point.c)
-        }
+if(Skip_First_signal) {
+    read_areas() 
+    if (BUY_Condition()) {
+        Log("Skipping first BUY signal, waiting for SELL signal")
+        loop{
+            read_areas()
+        } Until (SELL_Condition()) 
     }
-
-    else if(SELL_condition() && shortPosition <> 1 ) {
-        if(longPosition = 1) {
-            click(point.b)
-            longPosition := 0
-            click(point.c)
-        }
-        else {
-            click(point.b)
-            shortPosition := 1
-            click(point.c)
-        }
+    else if (SELL_Condition()) {
+        Log("Skipping first SELL signal, waiting for BUY signal")
+        loop{
+            read_areas()        
+        } Until (BUY_Condition())
     }
 }
+
+loop 
+{
+    Log("Waiting for BUY or SELL signal...")
+    loop {
+        read_areas()
+        sleep 100 ; reduce polling CPU usage
+    } until (BUY_Condition() || SELL_Condition())
+
+    if (BUY_Condition()) {
+        Log("BUY signal detected ! Entered Long Position")
+        click(point.a)
+        sleep 500
+        click(point.c)
+
+        loop {
+            read_areas()
+            openPL := toNumber(area[2])
+            openPL += 0
+        } until (SELL_Condition() || PnL_Exit(openPL)) 
+
+        if(SELL_Condition()) {
+            Log("Long Closed due to SELL condition")
+        }
+        else if(PnL_Exit(openPL)) {
+            Log("Long Closed due to PnL Exit: " + openPL)
+            Log("==on Hold until new SELL signal==")
+            loop {
+                read_areas()
+                sleep 100 ; reduce polling CPU usage
+            } Until SELL_Condition()
+        }
+        click(point.b)
+        sleep 500
+        click(point.c)
+    }
+
+    else if (SELL_Condition()) {
+        Log("SELL signal detected ! Entered SHORT Position")
+        click(point.b)
+        sleep 500
+        click(point.c)
+
+        loop {
+            read_areas()
+            openPL := toNumber(area[2])
+            openPL += 0
+        } until (BUY_Condition() || PnL_Exit(openPL) )
+
+        if(BUY_Condition()) {
+            Log("Short Closed due to BUY condition")
+        }
+        else if(PnL_Exit(openPL)) {
+            Log("Short Closed due to PnL Exit: " + openPL)
+            Log("== on Hold until new BUY signal ==")
+            loop {
+                read_areas()
+                sleep 100 ;reduce polling CPU usage
+            } Until BUY_Condition()
+        }
+        click(point.a)
+        sleep 500
+        click(point.c)
+    }
+}
+
+
 ```
 
 ---
