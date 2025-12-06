@@ -167,9 +167,6 @@ if repainting
 ## Nightshark Code
 
 ```javascript
-global TakeProfit := 500 ;This is your take profit level
-global StopLoss := -500 ; This is your stop loss level
-
 Skip_First_signal := true ; Set to true to skip the first signal after starting the script
 
 
@@ -179,10 +176,6 @@ BUY_Condition() {
 
 SELL_Condition() {
     return area[1] ~= "SELL"
-}
-
-PnL_Exit(openPL) {
-    return openPL >= TakeProfit || openPL <= StopLoss
 }
 
 click(point.c)
@@ -219,21 +212,10 @@ loop
 
         loop {
             read_areas()
-            openPL := toNumber(area[2])
-            openPL += 0
-        } until (SELL_Condition() || PnL_Exit(openPL)) 
+        } until (SELL_Condition()) 
 
-        if(SELL_Condition()) {
-            Log("Long Closed due to SELL condition")
-        }
-        else if(PnL_Exit(openPL)) {
-            Log("Long Closed due to PnL Exit: " + openPL)
-            Log("==on Hold until new SELL signal==")
-            loop {
-                read_areas()
-                sleep 100 ; reduce polling CPU usage
-            } Until SELL_Condition()
-        }
+        Log("Long Closed due to SELL condition")
+
         click(point.b)
         sleep 500
         click(point.c)
@@ -244,29 +226,16 @@ loop
         click(point.b)
         sleep 500
         click(point.c)
-
         loop {
             read_areas()
-            openPL := toNumber(area[2])
-            openPL += 0
-        } until (BUY_Condition() || PnL_Exit(openPL) )
-
-        if(BUY_Condition()) {
-            Log("Short Closed due to BUY condition")
-        }
-        else if(PnL_Exit(openPL)) {
-            Log("Short Closed due to PnL Exit: " + openPL)
-            Log("== on Hold until new BUY signal ==")
-            loop {
-                read_areas()
-                sleep 100 ;reduce polling CPU usage
-            } Until BUY_Condition()
-        }
+        } until (BUY_Condition() )
+        Log("Short Closed due to BUY condition")
         click(point.a)
         sleep 500
         click(point.c)
     }
 }
+
 
 
 ```
