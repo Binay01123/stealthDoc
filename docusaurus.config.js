@@ -13,6 +13,13 @@ const config = {
   title: 'ProcessOverProfit',
   tagline: 'Building systematic approaches and proven processes over chasing profits',
   favicon: 'img/logo.png',
+  scripts: [
+    {
+      src: 'https://static.cloudflareinsights.com/beacon.min.js',
+      defer: true,
+      'data-cf-beacon': '{"token": "7e3d66bb4f914cfeac0f963859577d7c"}',
+    },
+  ],
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
   future: {
