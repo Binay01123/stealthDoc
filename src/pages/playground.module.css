@@ -1,0 +1,166 @@
+.playgroundPage {
+  background: #bdbdbd;
+  font-family: Arial, Helvetica, sans-serif;
+  min-height: calc(100vh - 60px); /* Adjust for navbar */
+  padding-bottom: 40px;
+}
+
+.container {
+  margin: 0 auto;
+  padding-top: 60px;
+  padding-left: 85px;
+  max-width: 100%;
+}
+
+.title {
+  font-size: 48px;
+  font-weight: bold;
+  margin-bottom: 40px;
+  color: #000;
+}
+
+.layoutRow {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 40px;
+  flex-wrap: wrap;
+}
+
+.mainBox {
+  background: #000;
+  width: 80vw;
+  max-width: 1200px;
+  height: 600px;
+  border-radius: 0;
+  position: relative;
+  padding: 40px 0 0 40px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-width: 700px;
+  box-sizing: border-box;
+}
+
+.signalBox {
+  background: #ccc;
+  width: 320px;
+  height: 90px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  font-weight: bold;
+  margin-bottom: 60px;
+  outline: none;
+  border: none;
+  border-radius: 0;
+  transition: box-shadow 0.2s;
+  color: #000;
+}
+
+.signalBox:focus {
+  box-shadow: 0 0 0 4px #2196f3;
+}
+
+.plRow {
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  flex: 1;
+  gap: 80px;
+  padding-bottom: 40px;
+}
+
+.plCol {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.plLabel {
+  color: #fff;
+  font-size: 32px;
+  margin-bottom: 10px;
+}
+
+.plBox {
+  background: #8f9aff;
+  color: #000;
+  font-size: 36px;
+  font-weight: bold;
+  width: 260px;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0;
+  outline: none;
+  border: none;
+  transition: box-shadow 0.2s;
+}
+
+.plBox:focus {
+  box-shadow: 0 0 0 4px #a7d5fa;
+}
+
+.topRightBtns {
+  position: absolute;
+  top: 30px;
+  right: 40px;
+  display: flex;
+  gap: 16px;
+  z-index: 2;
+}
+
+.buyBtn {
+  background: #29d33c;
+  color: #000;
+  font-size: 22px;
+  font-weight: bold;
+  border: none;
+  border-radius: 6px;
+  padding: 12px 32px;
+  cursor: pointer;
+  transition: box-shadow 0.2s;
+}
+
+.buyBtn:active {
+  box-shadow: 0 0 0 3px #2196f3;
+}
+
+.sellBtn {
+  background: #ff3b3b;
+  color: #fff;
+  font-size: 22px;
+  font-weight: bold;
+  border: none;
+  border-radius: 6px;
+  padding: 12px 32px;
+  cursor: pointer;
+  transition: box-shadow 0.2s;
+}
+
+.sellBtn:active {
+  box-shadow: 0 0 0 3px #2196f3;
+}
+
+.logArea {
+  min-width: 280px;
+  max-width: 320px;
+  width: 20vw;
+  height: 600px;
+  background: #222;
+  color: #fff;
+  font-size: 20px;
+  padding: 18px 24px;
+  border-radius: 6px;
+  white-space: pre-line;
+  font-family: 'Menlo', 'Consolas', monospace;
+  box-sizing: border-box;
+  margin-top: 0;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+

@@ -53,10 +53,19 @@ function HomepageHeader() {
         <div className={styles.buttons}>
           <Link
             className="button button--secondary button--lg"
+            to="/playground">
+            <img 
+              src="/img/playground-icon.svg" 
+              alt="Playground" 
+              style={{width: '24px', height: '24px', marginRight: '8px', verticalAlign: 'middle'}} 
+            />
+            Enter Playground
+          </Link>
+          <Link
+            className="button button--secondary button--lg"
             href="https://www.youtube.com/@ProcessOverProfitHQ"
             target="_blank"
-            rel="noopener noreferrer"
-            style={{marginRight: '1rem'}}>
+            rel="noopener noreferrer">
             <img 
               src="/img/youtube-icon.svg" 
               alt="YouTube" 
