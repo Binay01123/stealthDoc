@@ -23,7 +23,7 @@ const sidebars = {
         'youtube-code/video-1/video-1-mlma',
         'youtube-code/video-2/video-2-WicklessHeikenAshi',
         'youtube-code/video-3/video-3-SuperTrend',
-        'youtube-code/video-4/video-4-mlma',
+        'youtube-code/video-4/video-4-mean-reversion',
         'youtube-code/video-5/video-5-mlma',
         'youtube-code/video-6/video-6-mlma',
         'youtube-code/video-7/video-7-mlma',
