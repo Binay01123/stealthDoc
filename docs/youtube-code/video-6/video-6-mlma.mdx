@@ -624,6 +624,7 @@ loop {
       sleep 2000
       click(point.e)
       sleep 5000
+      read_areas()
       if (toNumber(area[4]) > 0) {
         Log("UP position confirmed")
         break
@@ -640,7 +641,6 @@ loop {
     read_area(3)
   } until (toNumber(area[3]) < 1 || toNumber(area[3] > 850))
   Log("Loading New Session")
-  
 }
 ```
 
