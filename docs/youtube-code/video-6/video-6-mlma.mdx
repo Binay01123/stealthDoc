@@ -536,25 +536,17 @@ Build a crypto 15-minute market trading bot for Kalshi using trigger points for 
 
   hud.querySelector("#nextSession").onclick = () => clickNextSession();
 
-  // ================= AUTO-DISMISS "0 of N" DONE PANEL =================
-  function autoDismissLostPanel() {
-    const spans = document.querySelectorAll("span");
-    for (const s of spans) {
-      if (hud.contains(s)) continue;
-      const t = (s.textContent || "").trim();
-      if (!/^0\s+of\s+\d+$/.test(t)) continue;
-
-      const panel = s.closest("div.sticky") || s.closest("div");
+  // ================= AUTO-DISMISS DONE PANEL =================
+  function autoDismissDonePanel() {
+    const btns = document.querySelectorAll("button");
+    for (const b of btns) {
+      if (hud.contains(b)) continue;
+      if (norm(b.textContent) !== "done") continue;
+      const panel = b.closest("div.sticky");
       if (!panel) continue;
-
-      const btns = panel.querySelectorAll("button");
-      for (const b of btns) {
-        if (norm(b.textContent) === "done") {
-          log("AUTO-DISMISS: clicking Done (0 of " + t.split("of")[1].trim() + ")");
-          pointerClick(b);
-          return;
-        }
-      }
+      log("AUTO-DISMISS: clicking Done");
+      pointerClick(b);
+      return;
     }
   }
 
@@ -574,13 +566,14 @@ Build a crypto 15-minute market trading bot for Kalshi using trigger points for 
   // ================= TIMER TICK (1s interval, independent of throttle) =================
   if (STATE.timerInterval) clearInterval(STATE.timerInterval);
   STATE.timerInterval = setInterval(() => {
-    try { updateTimer(); updatePosition(); autoDismissLostPanel(); } catch {}
+    try { updateTimer(); updatePosition(); autoDismissDonePanel(); } catch {}
   }, 1000);
 
   // ================= INIT =================
   scheduleUIUpdate();
   log("Kalshi HUD: ON");
 })();
+
 
 ```
 
