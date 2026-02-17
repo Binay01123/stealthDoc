@@ -1,10 +1,11 @@
 ---
 id: video-6-mlma
-title: Video-6 MLMA
-sidebar_label: Video-6 MLMA
+title: Crypto 15 Min Kalshi Trading Bot
+sidebar_label: Video-6 Kalshi 15 Min
 sidebar_position: 7
-slug: /youtube-code/video-6-mlma
-draft: true
+slug: /youtube-code/video-6-Kalshi-15-Min
+description: Build a crypto 15-minute market trading bot for Kalshi using trigger points for high-probability trades. Learn to identify confluence zones, set up automated entries and exits, and execute on Kalshi's crypto markets.
+keywords: [Kalshi crypto trading bot, 15 minute crypto strategy, Kalshi automation, crypto trigger point trading, high probability crypto trades, Kalshi 15 min markets, crypto trading automation Kalshi, trigger point strategy crypto, algorithmic crypto trading Kalshi, 15 min timeframe crypto bot]
 ---
 
 <!--
@@ -19,9 +20,9 @@ draft: true
   6. Paste your indicator and Nightshark code in the respective code blocks
 -->
 
-# Video-6 MLMA
+# Crypto 15 Min Kalshi Trading Bot
 
-This walkthrough shows how to automate trades by pairing TradingView’s Machine Learning Moving Average script with NightShark and Tradovate. Copy the Pine Script into TradingView, attach it to a clean chart, and inspect replay signals. Load the NightShark script, map buy, sell, and neutral zones, then mirror orders to Tradovate while considering risk controls and expanded monitoring for ongoing insights.
+Build a crypto 15-minute market trading bot for Kalshi using trigger points for high-probability trades. This walkthrough shows how to identify confluence zones and trigger levels on TradingView, set up automated entries and exits, and execute on Kalshi’s crypto markets.
 
 {/* ## YouTube Video
 
@@ -42,186 +43,614 @@ This walkthrough shows how to automate trades by pairing TradingView’s Machine
 
 ## Screen Map
 
-![Screen map showing TradingView, NightShark, and Tradovate](./2025-11-17-00-28-44.png)
+
+![Screen map showing TradingView and Kalshi](./2026-02-16-23-43-52.png)
 
 ## Indicator Code
 
 ```python
-//@version=6
-indicator("Machine Learning Moving Average [LuxAlgo]", "LuxAlgo - Machine Learning Moving Average", overlay=true)
-//---------------------------------------------------------------------------------------------------------------------
-// Settings
-//---------------------------------------------------------------------------------------------------------------------
-window   = input.int(100, minval=0)
-forecast = input.int(0)
-sigma    = input.float(0.01, step=0.1, minval=0)
+(() => {
+  // ================= CLEANUP (safe for SPA / re-run) =================
+  const OLD = document.getElementById("KALSHI_HUD");
+  if (OLD) OLD.remove();
 
-mult = input.float(2, 'Multiplicative Factor', minval=0)
-src  = input.source(close, 'Source')
+  if (!window.__KALSHI_HUD_STATE__) window.__KALSHI_HUD_STATE__ = {};
+  const STATE = window.__KALSHI_HUD_STATE__;
 
-// Style
-upCss   = input.color(color.new(#5b9cf6, 50), 'Upper Extremity', group='Style')
-dnCss   = input.color(color.new(#e91e63, 50), 'Lower Extremity', group='Style')
+  try { (STATE.observers || []).forEach(o => o.disconnect()); } catch {}
+  STATE.observers = [];
 
-bullCss = input.color(#3179f5, 'Moving Average', inline='ma', group='Style')
-bearCss = input.color(#e91e63, '', inline='ma', group='Style')
+  // Abort previous global listeners so re-runs don't leak
+  if (STATE.abortController) {
+    try { STATE.abortController.abort(); } catch {}
+  }
+  STATE.abortController = new AbortController();
+  const signal = STATE.abortController.signal;
 
-//---------------------------------------------------------------------------------------------------------------------
-// Functions
-//---------------------------------------------------------------------------------------------------------------------
-rbf(x1, x2, l) => math.exp(-math.pow(x1 - x2, 2) / (2.0 * math.pow(l, 2)))
+  // ================= CONFIG =================
+  const GREEN = "#00ff66";
+  const LS_DOLLARS = "__KALSHI_DOLLARS__";
+  const LS_POS = "__KALSHI_HUD_POS__";
+  let fontSize = 16;
 
-kernel_matrix(X1, X2, l) =>
-    km = matrix.new<float>(array.size(X1), array.size(X2))
+  // throttle: run at most once every THROTTLE_MS (not every rAF / ~16ms)
+  const THROTTLE_MS = 300;
+  let throttleTimer = null;
+  let lastUIUpdate = 0;
 
-    i = 0
-    for x1 in X1
-        j = 0
-        for x2 in X2
-            rbf_val = rbf(x1, x2, l)
-            matrix.set(km, i, j, rbf_val)
-            j += 1
-        i += 1
-    km
+  const scheduleUIUpdate = () => {
+    if (throttleTimer) return;
 
-//---------------------------------------------------------------------------------------------------------------------
-// Kernel Setup
-//---------------------------------------------------------------------------------------------------------------------
-var identity = matrix.new<int>(window, window, 0)
-var K_row = array.new_float(0)
+    const elapsed = Date.now() - lastUIUpdate;
+    if (elapsed >= THROTTLE_MS) {
+      lastUIUpdate = Date.now();
+      try { updatePrices(); updateTimer(); updatePosition(); } catch {}
+    } else {
+      throttleTimer = setTimeout(() => {
+        throttleTimer = null;
+        lastUIUpdate = Date.now();
+        try { updatePrices(); updateTimer(); updatePosition(); } catch {}
+      }, THROTTLE_MS - elapsed);
+    }
+  };
 
-if barstate.isfirst
-    var xtrain = array.new_int(0)
-    var xtest  = array.new_int(0)
+  // ================= HUD UI =================
+  const hud = document.createElement("div");
+  hud.id = "KALSHI_HUD";
+  hud.style.cssText = `
+    position: fixed;
+    top: 90px;
+    left: 90px;
+    z-index: 2147483647;
+    background: black;
+    border: 2px solid ${GREEN};
+    border-radius: 12px;
+    padding: 12px;
+    font-family: monospace;
+    color: ${GREEN};
+    user-select: none;
+    min-width: 391px;
+  `;
 
-    // Build identity matrix and training array
-    for i = 0 to window - 1
-        for j = 0 to window - 1
-            matrix.set(identity, i, j, i == j ? 1 : 0)
-        array.push(xtrain, i)
-    
-    // Build testing array
-    for i = 0 to window + forecast - 1
-        array.push(xtest, i)
-    
-    // Compute kernel matrices
-    s      = matrix.mult(identity, sigma * sigma)
-    Ktrain = matrix.sum(kernel_matrix(xtrain, xtrain, window), s)
-    K_inv  = matrix.pinv(Ktrain)
-    K_star = kernel_matrix(xtrain, xtest, window)
-    // Multiply the transpose of K_star by K_inv and get the (window+forecast-1)th row as an array
-    K_row_temp = matrix.row(matrix.mult(matrix.transpose(K_star), K_inv), window + forecast - 1)
-    // Copy the computed row to K_row
-    for i = 0 to array.size(K_row_temp) - 1
-        array.push(K_row, array.get(K_row_temp, i))
+  // restore persisted position (if any)
+  try {
+    const saved = JSON.parse(localStorage.getItem(LS_POS) || "null");
+    if (saved && Number.isFinite(saved.left) && Number.isFinite(saved.top)) {
+      hud.style.left = `${saved.left}px`;
+      hud.style.top = `${saved.top}px`;
+    }
+  } catch {}
 
-//---------------------------------------------------------------------------------------------------------------------
-// Moving Average Calculation
-//---------------------------------------------------------------------------------------------------------------------
-var os = 0
+  const storedDollars = localStorage.getItem(LS_DOLLARS) || "";
 
-mean = ta.sma(src, window)
+  hud.innerHTML = `
+    <div id="hudHeader" style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;cursor:move">
+      <div style="opacity:.9;font-weight:700">HUD</div>
+      <div style="display:flex;gap:10px">
+        <button id="dec">−</button>
+        <button id="inc">+</button>
+        <button id="nextSession">NEXT SESSION</button>
+      </div>
+    </div>
 
-// Get end point estimate
-var float out = na
+    <table id="tbl" style="border-collapse:collapse;font-size:${fontSize}px;width:100%;text-align:center">
+      <tr>
+        <td style="border:1px solid ${GREEN};padding:18px" id="aLabel">UP</td>
+        <td style="border:1px solid ${GREEN};padding:18px" id="aPrice">--</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid ${GREEN};padding:18px" id="bLabel">DOWN</td>
+        <td style="border:1px solid ${GREEN};padding:18px" id="bPrice">--</td>
+      </tr>
+      <tr>
+        <td style="border:1px solid ${GREEN};padding:18px" id="tLabel">TIME</td>
+        <td style="border:1px solid ${GREEN};padding:18px" id="tVal">--</td>
+      </tr>
+    </table>
 
-if bar_index > window
-    dotprod = 0.0
-    // Dot product between last K_row and training data
-    for i = 0 to window - 1
-        dotprod += array.get(K_row, i) * (src[window - 1 - i] - mean)
-    // Output
-    out := dotprod + mean
+    <div style="display:flex;gap:12px;margin-top:14px">
+      <button id="buyA" class="bigBuy">BUY UP</button>
+      <button id="buyB" class="bigBuy">BUY DOWN</button>
+    </div>
 
-mae   = ta.sma(math.abs(src - out), window) * mult
-upper = out + mae
-lower = out - mae
+    <div style="display:flex;gap:12px;margin-top:14px;align-items:center">
+      <input id="dollarsBox" placeholder="DOLLARS" value="${storedDollars.replace(/"/g, "&quot;")}"
+        style="
+          flex:1;
+          background:black;
+          color:${GREEN};
+          border:1px solid ${GREEN};
+          padding:12px 14px;
+          font-family:monospace;
+          outline:none;
+          font-size:16px;
+        "/>
+      <button id="fillDollars" class="fillBtn">FILL DOLLARS</button>
+    </div>
 
-os := close > upper and out > out[1] ? 1 : close < lower and out < out[1] ? 0 : os
+    <div style="display:flex;gap:12px;margin-top:14px;align-items:center">
+      <div style="min-width:98px;opacity:0.9;font-weight:800">POSITION</div>
+      <div id="posBox" style="
+          flex:1;
+          border:2px solid ${GREEN};
+          padding:18px 22px;
+          text-align:center;
+          letter-spacing:2px;
+          font-weight:900;
+          font-size: 20px;
+        ">0</div>
+    </div>
 
-//---------------------------------------------------------------------------------------------------------------------
-// Plotting
-//---------------------------------------------------------------------------------------------------------------------
-plot_out = plot(out, 'End Point GPR', color = os == 1 ? bullCss : bearCss)
-plot_change = plot(os != os[1] ? out : na, 'Circle', color = os == 1 ? bullCss : bearCss, linewidth = 3, style = plot.style_circles)
-plot_upper  = plot(upper, 'Upper', color = na)
-plot_lower  = plot(lower, 'Lower', color = na)
+    <div id="dbg" style="margin-top:12px;font-size:12px;opacity:0.85;text-align:left"></div>
+  `;
 
-fill(plot_upper, plot_out, out + mae, out, upCss, color.new(chart.bg_color, 100))
-fill(plot_out, plot_lower, out, out - mae, color.new(chart.bg_color, 100), dnCss)
+  // Base button style
+  hud.querySelectorAll("button").forEach(b => {
+    b.style.cssText = `
+      background:black;
+      color:${GREEN};
+      border:1px solid ${GREEN};
+      cursor:pointer;
+      font-family:monospace;
+      white-space:nowrap;
+    `;
+  });
 
-//---------------------------------------------------------------------------------------------------------------------
-// Table Setup
-//---------------------------------------------------------------------------------------------------------------------
-// Create a table with 2 columns and 1 row in the top-right corner
-var table signalTable = table.new(position.top_right, 2, 1, border_width = 1, frame_color = color.black)
+  // Header buttons
+  hud.querySelector("#dec").style.padding = "10px 14px";
+  hud.querySelector("#inc").style.padding = "10px 14px";
+  hud.querySelector("#nextSession").style.padding = "10px 16px";
 
-// Determine the signal text
-signalText = close > upper and out > out[1] ? "BUY" : close < lower and out < out[1] ? "SELL" : "NONE"
+  // Big BUY buttons
+  hud.querySelectorAll(".bigBuy").forEach(b => {
+    b.style.flex = "1";
+    b.style.padding = "22px 18px";
+    b.style.fontSize = "20px";
+    b.style.fontWeight = "900";
+    b.style.letterSpacing = "1px";
+  });
 
-// Set background color: green for BUY, red for SELL, white for NONE
-bgColor    = close > upper and out > out[1] ? color.green : close < lower and out < out[1] ? color.red : color.white
+  // Fill button
+  const fillBtn = hud.querySelector("#fillDollars");
+  fillBtn.style.padding = "12px 16px";
+  fillBtn.style.fontSize = "16px";
+  fillBtn.style.fontWeight = "800";
 
-// Set text color: white for BUY/SELL, black for NONE
-textColor  = close > upper and out > out[1] ? color.white : close < lower and out < out[1] ? color.white : color.black
+  document.body.appendChild(hud);
 
-// Update table cells on every bar
-table.cell(signalTable, 0, 0, "SIGNAL", text_color = color.white, text_size = size.large, bgcolor = color.gray)
-table.cell(signalTable, 1, 0, signalText, text_color = textColor, text_size = size.large, bgcolor = bgColor)
+  const dbg = hud.querySelector("#dbg");
+  const posBox = hud.querySelector("#posBox");
+  const table = hud.querySelector("#tbl");
+  const hudHeader = hud.querySelector("#hudHeader");
+
+  const aLabelEl = hud.querySelector("#aLabel");
+  const bLabelEl = hud.querySelector("#bLabel");
+  const aPriceEl = hud.querySelector("#aPrice");
+  const bPriceEl = hud.querySelector("#bPrice");
+
+  const tValEl = hud.querySelector("#tVal");
+
+  const log = (msg) => (dbg.textContent = msg);
+
+  // ================= DRAG (only from header, persist position) =================
+  let dragging = false, dx = 0, dy = 0;
+
+  const savePos = () => {
+    try {
+      localStorage.setItem(LS_POS, JSON.stringify({
+        left: hud.offsetLeft,
+        top: hud.offsetTop
+      }));
+    } catch {}
+  };
+
+  hudHeader.addEventListener("mousedown", e => {
+    // Don't start drag if the target is a button or input
+    if (e.target.closest("button") || e.target.closest("input")) return;
+    dragging = true;
+    dx = e.clientX - hud.offsetLeft;
+    dy = e.clientY - hud.offsetTop;
+    e.preventDefault();
+  });
+
+  document.addEventListener("mousemove", e => {
+    if (!dragging) return;
+    hud.style.left = (e.clientX - dx) + "px";
+    hud.style.top  = (e.clientY - dy) + "px";
+  }, { signal });
+
+  document.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    savePos();
+  }, { signal });
+
+  window.addEventListener("blur", () => {
+    if (dragging) { dragging = false; savePos(); }
+  }, { signal });
+
+  // ================= FONT SIZE =================
+  hud.querySelector("#inc").onclick = () => {
+    fontSize += 2;
+    table.style.fontSize = fontSize + "px";
+  };
+  hud.querySelector("#dec").onclick = () => {
+    fontSize = Math.max(10, fontSize - 2);
+    table.style.fontSize = fontSize + "px";
+  };
+
+  // ================= HELPERS =================
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const norm = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+  function pointerClick(el) {
+    if (!el) return false;
+    try { el.scrollIntoView({ block: "center", inline: "center" }); } catch {}
+    const r = el.getBoundingClientRect();
+    const x = Math.floor(r.left + r.width / 2);
+    const y = Math.floor(r.top + r.height / 2);
+
+    const common = {
+      bubbles: true, cancelable: true, composed: true, view: window,
+      clientX: x, clientY: y, screenX: x, screenY: y,
+      button: 0, buttons: 1
+    };
+
+    try {
+      el.focus?.();
+      el.dispatchEvent(new PointerEvent("pointerdown", { ...common, pointerId: 1, pointerType: "mouse", isPrimary: true }));
+      el.dispatchEvent(new MouseEvent("mousedown", common));
+      el.dispatchEvent(new PointerEvent("pointerup", { ...common, pointerId: 1, pointerType: "mouse", isPrimary: true }));
+      el.dispatchEvent(new MouseEvent("mouseup", common));
+      el.dispatchEvent(new MouseEvent("click", common));
+      return true;
+    } catch {
+      try { el.click?.(); return true; } catch {}
+      return false;
+    }
+  }
+
+  function setNativeValue(input, value) {
+    const proto = Object.getPrototypeOf(input);
+    const desc = Object.getOwnPropertyDescriptor(proto, "value");
+    if (desc && desc.set) desc.set.call(input, value);
+    else input.value = value;
+  }
+
+  // ================= ROBUST OUTCOME PRICES =================
+  function findOutcomePillsRobust() {
+    const pills = [...document.querySelectorAll('button[data-testid="price-pill"]')];
+
+    // Prefer Up/Down
+    let up = null, down = null;
+    for (const b of pills) {
+      const t = norm(b.textContent);
+      if (!up && /\bup\b/.test(t)) up = b;
+      if (!down && /\bdown\b/.test(t)) down = b;
+    }
+    if (up || down) return { aLabel: "UP", bLabel: "DOWN", aEl: up, bEl: down };
+
+    // Fallback Yes/No
+    let yes = null, no = null;
+    for (const b of pills) {
+      const t = norm(b.textContent);
+      if (!yes && /\byes\b/.test(t)) yes = b;
+      if (!no && /\bno\b/.test(t)) no = b;
+    }
+    return { aLabel: "UP", bLabel: "DOWN", aEl: yes, bEl: no };
+  }
+
+  function extractCents(el) {
+    if (!el) return null;
+    const m = (el.textContent || "").match(/(\d+)\s*¢/);
+    return m ? m[1] : null;
+  }
+
+  function updatePrices() {
+    const { aLabel, bLabel, aEl, bEl } = findOutcomePillsRobust();
+
+    aLabelEl.textContent = aLabel;
+    bLabelEl.textContent = bLabel;
+
+    aPriceEl.textContent = extractCents(aEl) ?? "--";
+    bPriceEl.textContent = extractCents(bEl) ?? "--";
+
+    STATE.aEl = aEl;
+    STATE.bEl = bEl;
+
+    log(`Prices: Up=${aPriceEl.textContent} Down=${bPriceEl.textContent}`);
+  }
+
+  // ================= POSITION DETECTION =================
+  const QTY_RE = /^(\d+)\s+(yes|no)$/i;
+
+  function findPositionQuantity() {
+    // Method 1: "Your position" label
+    const spans = document.querySelectorAll("span");
+    for (const s of spans) {
+      if (hud.contains(s)) continue;
+      if ((s.textContent || "").trim() !== "Your position") continue;
+      const container = s.closest("div");
+      if (!container) continue;
+      const inner = container.querySelectorAll("span");
+      for (const ps of inner) {
+        const m = (ps.textContent || "").trim().match(QTY_RE);
+        if (m) return parseInt(m[1], 10);
+      }
+    }
+
+    // Method 2: CheckCircleIcon with adjacent "N Yes" / "N No" span
+    const icons = document.querySelectorAll('svg[data-testid="CheckCircleIcon"]');
+    for (const ic of icons) {
+      if (hud.contains(ic)) continue;
+      const wrapper = ic.closest("div");
+      if (!wrapper) continue;
+      const nearby = wrapper.querySelectorAll("span");
+      for (const ps of nearby) {
+        const m = (ps.textContent || "").trim().match(QTY_RE);
+        if (m) return parseInt(m[1], 10);
+      }
+    }
+
+    return 0;
+  }
+
+  function updatePosition() {
+    posBox.textContent = findPositionQuantity();
+  }
+
+  // ================= COUNTDOWN TIMER =================
+  function findCountdownSpan() {
+    const spans = document.querySelectorAll("span");
+    for (const s of spans) {
+      if (hud.contains(s)) continue;
+      const ff = s.style.fontFeatureSettings || "";
+      if (ff.includes("tnum") && ff.includes("cv09")) {
+        const t = (s.textContent || "").trim();
+        if (/^\d{1,2}:\d{2}$/.test(t)) return s;
+      }
+    }
+    return null;
+  }
+
+  function mmssToSeconds(mmss) {
+    const parts = mmss.split(":");
+    if (parts.length !== 2) return null;
+    const mins = parseInt(parts[0], 10);
+    const secs = parseInt(parts[1], 10);
+    if (isNaN(mins) || isNaN(secs)) return null;
+    return mins * 60 + secs;
+  }
+
+  function updateTimer() {
+    const span = findCountdownSpan();
+    if (!span) {
+      tValEl.textContent = "--";
+      return;
+    }
+    const raw = (span.textContent || "").trim();
+    const totalSec = mmssToSeconds(raw);
+    if (totalSec === null) {
+      tValEl.textContent = "--";
+      return;
+    }
+    tValEl.textContent = totalSec;
+  }
+
+  // ================= DOLLARS INPUT + FILL =================
+  const dollarsBox = hud.querySelector("#dollarsBox");
+  dollarsBox.addEventListener("input", () => localStorage.setItem(LS_DOLLARS, dollarsBox.value));
+
+  function findDollarsInput() {
+    return document.querySelector("#cost-input") || null;
+  }
+
+  function fillDollars() {
+    const raw = (dollarsBox.value || "").trim();
+    if (!raw) return log("FILL DOLLARS: empty");
+
+    const val = raw.replace(/[^\d.]/g, "");
+    if (!val) return log("FILL DOLLARS: invalid");
+
+    const input = findDollarsInput();
+    if (!input) return log("FILL DOLLARS: dollars input not found");
+
+    input.focus();
+    pointerClick(input);
+
+    setNativeValue(input, val);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.blur();
+
+    log(`FILL DOLLARS: ${val}`);
+  }
+
+  hud.querySelector("#fillDollars").onclick = () => fillDollars();
+
+  // ================= BUY UP / BUY DOWN =================
+  function findReviewButton() {
+    const btns = [...document.querySelectorAll("button")];
+    return btns.find(b => {
+      if (hud.contains(b)) return false;
+      return norm(b.textContent) === "review" && !b.disabled;
+    }) || null;
+  }
+
+  async function buy(side /* "UP"|"DOWN" */) {
+    // Re-read pills fresh in case DOM changed since last update
+    const { aEl, bEl } = findOutcomePillsRobust();
+    const pill = side === "UP" ? aEl : bEl;
+    if (!pill) return log(`BUY ${side}: pill not found`);
+
+    log(`BUY ${side}: select`);
+    pointerClick(pill);
+
+    await sleep(140);
+
+    const reviewBtn = findReviewButton();
+    if (!reviewBtn) return log(`BUY ${side}: Review not found/enabled`);
+
+    log(`BUY ${side}: click Review`);
+    pointerClick(reviewBtn);
+  }
+
+  hud.querySelector("#buyA").onclick = () => buy("UP");
+  hud.querySelector("#buyB").onclick = () => buy("DOWN");
+
+  // ================= NEXT SESSION =================
+  function findSessionPills() {
+    const timeRe = /\b\d{1,2}:\d{2}\s*(AM|PM)\b/i;
+    return [...document.querySelectorAll('button, a')].filter(el => {
+      if (hud.contains(el)) return false;
+      const t = (el.textContent || "").trim();
+      if (!timeRe.test(t)) return false;
+      if (/\bmore\b/i.test(t) || /\bpast\b/i.test(t)) return false;
+      if (!el.classList.contains("inline-flex")) return false;
+      return true;
+    });
+  }
+
+  function findActiveSessionIndex(pills) {
+    for (let i = 0; i < pills.length; i++) {
+      if (pills[i].classList.contains("bg-fill-x10")) return i;
+      if (pills[i].classList.contains("text-text-inverse")) return i;
+    }
+    return -1;
+  }
+
+  function clickNextSession() {
+    const pills = findSessionPills();
+    if (!pills.length) return log("NEXT SESSION: no session pills found");
+
+    const activeIdx = findActiveSessionIndex(pills);
+    if (activeIdx === -1) return log("NEXT SESSION: active not found");
+
+    const nextIdx = activeIdx + 1;
+    if (nextIdx >= pills.length) return log("NEXT SESSION: already on last visible session");
+
+    const nextPill = pills[nextIdx];
+    log("NEXT SESSION: clicking " + (nextPill.textContent || "").trim());
+    pointerClick(nextPill);
+  }
+
+  hud.querySelector("#nextSession").onclick = () => clickNextSession();
+
+  // ================= AUTO-DISMISS "0 of N" DONE PANEL =================
+  function autoDismissLostPanel() {
+    const spans = document.querySelectorAll("span");
+    for (const s of spans) {
+      if (hud.contains(s)) continue;
+      const t = (s.textContent || "").trim();
+      if (!/^0\s+of\s+\d+$/.test(t)) continue;
+
+      const panel = s.closest("div.sticky") || s.closest("div");
+      if (!panel) continue;
+
+      const btns = panel.querySelectorAll("button");
+      for (const b of btns) {
+        if (norm(b.textContent) === "done") {
+          log("AUTO-DISMISS: clicking Done (0 of " + t.split("of")[1].trim() + ")");
+          pointerClick(b);
+          return;
+        }
+      }
+    }
+  }
+
+  // ================= OBSERVERS =================
+  const obs = new MutationObserver((mutations) => {
+    // Skip mutations that originated inside the HUD itself
+    for (const m of mutations) {
+      if (!hud.contains(m.target)) {
+        scheduleUIUpdate();
+        return;
+      }
+    }
+  });
+  obs.observe(document.body, { childList: true, subtree: true, characterData: true });
+  STATE.observers.push(obs);
+
+  // ================= TIMER TICK (1s interval, independent of throttle) =================
+  if (STATE.timerInterval) clearInterval(STATE.timerInterval);
+  STATE.timerInterval = setInterval(() => {
+    try { updateTimer(); updatePosition(); autoDismissLostPanel(); } catch {}
+  }, 1000);
+
+  // ================= INIT =================
+  scheduleUIUpdate();
+  log("Kalshi HUD: ON");
+})();
+
 ```
 
 ## Nightshark Code
 
 ```javascript
-;Machine learning Moving Average Code
+triggerPoint := 85
 
-
-StopScript() {
-    Send, {F2}
-}
-
-BUY_condition() {
-    global
-    return (area[1] ~= "BUY")
-}
-
-SELL_condition() {
-    global
-    return (area[1] ~= "SELL")
-}
-
-longPosition:= 0
-shortPosition := 0
+Log("Application Started !!")
 loop {
-    loop{
+  Log("Monitoring UP & Down to hit Trigger Price > " . triggerPoint )
+  loop{
     read_areas()
-    } until (BUY_condition() || SELL_condition() )
-
-    if(BUY_condition() && longPosition <> 1) {
-        if(shortPosition = 1) {
-            click(point.a)
-            shortPosition:= 0
-            click(point.c)
-        }
-        else {
-            click(point.a)
-            longPosition := 1
-            click(point.c)
-        }
+  } until (toNumber(area[1]) > triggerPoint || toNumber(area[2]) > triggerPoint )
+  
+  if (toNumber(area[1]) > triggerPoint) {
+  Log("UP triggered !! Placing Up Order")
+  loop, 4{
+      click(point.a)
+      sleep 200
+      click(point.c)
+      sleep 2000
+      click(point.d)
+      sleep 2000
+      click(point.e)
+      sleep 2000
+      click(point.e)
+      sleep 4000
+      read_areas()
+      if (toNumber(area[4]) > 0) {
+        Log("UP position confirmed")
+        break
+      }
+      else {
+        Log("Position not confirmed ! Retrying ...")
+        sleep 1000
+      }
+    }  
+  }
+  
+  else if (toNumber(area[2]) > triggerPoint) {
+  Log("Down triggered !! Placing Down Order")
+      loop, 4 {
+      click(point.b)
+      sleep 500
+      click(point.c)
+      sleep 2000
+      click(point.d)
+      sleep 2000
+      click(point.e)
+      sleep 2000
+      click(point.e)
+      sleep 4000
+      if (toNumber(area[4]) > 0) {
+        Log("UP position confirmed")
+        break
+      } 
+      else {
+        Log("Position not confirmed ! Retrying ...")
+        sleep 1000
+      }
     }
-
-    else if(SELL_condition() && shortPosition <> 1 ) {
-        if(longPosition = 1) {
-            click(point.b)
-            longPosition := 0
-            click(point.c)
-        }
-        else {
-            click(point.b)
-            shortPosition := 1
-            click(point.c)
-        }
-    }
+  }
+  
+  Log("Waiting for Next Session")
+  loop {
+    read_area(3)
+  } until (toNumber(area[3]) < 1)
+  Log("Loading New Session")
+  
 }
 ```
 
