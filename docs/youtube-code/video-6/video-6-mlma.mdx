@@ -44,7 +44,9 @@ Build a crypto 15-minute market trading bot for Kalshi using trigger points for 
 ## Screen Map
 
 
-![Screen map showing TradingView and Kalshi](./2026-02-16-23-43-52.png)
+![Screen map showing TradingView and Kalshi](./2026-02-17-21-19-18.png)
+
+
 
 ## Indicator Code
 
@@ -129,7 +131,7 @@ Build a crypto 15-minute market trading bot for Kalshi using trigger points for 
       <div style="display:flex;gap:10px">
         <button id="dec">−</button>
         <button id="inc">+</button>
-        <button id="nextSession">NEXT SESSION</button>
+        <button id="liveSession">LIVE SESSION</button>
       </div>
     </div>
 
@@ -199,7 +201,7 @@ Build a crypto 15-minute market trading bot for Kalshi using trigger points for 
   // Header buttons
   hud.querySelector("#dec").style.padding = "10px 14px";
   hud.querySelector("#inc").style.padding = "10px 14px";
-  hud.querySelector("#nextSession").style.padding = "10px 16px";
+  hud.querySelector("#liveSession").style.padding = "10px 16px";
 
   // Big BUY buttons
   hud.querySelectorAll(".bigBuy").forEach(b => {
@@ -498,43 +500,27 @@ Build a crypto 15-minute market trading bot for Kalshi using trigger points for 
   hud.querySelector("#buyA").onclick = () => buy("UP");
   hud.querySelector("#buyB").onclick = () => buy("DOWN");
 
-  // ================= NEXT SESSION =================
-  function findSessionPills() {
-    const timeRe = /\b\d{1,2}:\d{2}\s*(AM|PM)\b/i;
-    return [...document.querySelectorAll('button, a')].filter(el => {
-      if (hud.contains(el)) return false;
-      const t = (el.textContent || "").trim();
-      if (!timeRe.test(t)) return false;
-      if (/\bmore\b/i.test(t) || /\bpast\b/i.test(t)) return false;
-      if (!el.classList.contains("inline-flex")) return false;
-      return true;
-    });
-  }
-
-  function findActiveSessionIndex(pills) {
-    for (let i = 0; i < pills.length; i++) {
-      if (pills[i].classList.contains("bg-fill-x10")) return i;
-      if (pills[i].classList.contains("text-text-inverse")) return i;
+  // ================= LIVE SESSION =================
+  function findLiveSessionButton() {
+    const pings = document.querySelectorAll(".animate-ping");
+    for (const ping of pings) {
+      if (hud.contains(ping)) continue;
+      const btn = ping.closest("a, button");
+      if (!btn || hud.contains(btn)) continue;
+      const timeRe = /\b\d{1,2}:\d{2}\s*(AM|PM)\b/i;
+      if (timeRe.test(btn.textContent || "")) return btn;
     }
-    return -1;
+    return null;
   }
 
-  function clickNextSession() {
-    const pills = findSessionPills();
-    if (!pills.length) return log("NEXT SESSION: no session pills found");
-
-    const activeIdx = findActiveSessionIndex(pills);
-    if (activeIdx === -1) return log("NEXT SESSION: active not found");
-
-    const nextIdx = activeIdx + 1;
-    if (nextIdx >= pills.length) return log("NEXT SESSION: already on last visible session");
-
-    const nextPill = pills[nextIdx];
-    log("NEXT SESSION: clicking " + (nextPill.textContent || "").trim());
-    pointerClick(nextPill);
+  function clickLiveSession() {
+    const btn = findLiveSessionButton();
+    if (!btn) return log("LIVE SESSION: no live session found");
+    log("LIVE SESSION: clicking " + (btn.textContent || "").trim());
+    pointerClick(btn);
   }
 
-  hud.querySelector("#nextSession").onclick = () => clickNextSession();
+  hud.querySelector("#liveSession").onclick = () => clickLiveSession();
 
   // ================= AUTO-DISMISS DONE PANEL =================
   function autoDismissDonePanel() {
@@ -580,7 +566,6 @@ Build a crypto 15-minute market trading bot for Kalshi using trigger points for 
 ## Nightshark Code
 
 ```javascript
-
 triggerPoint := 85
 
 Log("Application Started !!")
@@ -588,7 +573,7 @@ loop {
   Log("Monitoring UP & Down to hit Trigger Price > " . triggerPoint )
   loop{
     read_areas()
-  } until (toNumber(area[1]) > triggerPoint || toNumber(area[2]) > triggerPoint )
+  } until (toNumber(area[1]) > triggerPoint || toNumber(area[2]) > triggerPoint || toNumber(area[3]) < 60 )
   
   if (toNumber(area[1]) > triggerPoint) {
   Log("UP triggered !! Placing Up Order")
@@ -600,7 +585,7 @@ loop {
       click(point.d)
       sleep 2000
       click(point.e)
-      sleep 5000
+      sleep 4000
       read_areas()
       if (toNumber(area[4]) > 0) {
         Log("UP position confirmed")
@@ -617,13 +602,13 @@ loop {
   Log("Down triggered !! Placing Down Order")
       loop, 4 {
       click(point.b)
-      sleep 500
+      sleep 200
       click(point.c)
       sleep 2000
       click(point.d)
       sleep 2000
       click(point.e)
-      sleep 5000
+      sleep 4000
       read_areas()
       if (toNumber(area[4]) > 0) {
         Log("UP position confirmed")
@@ -636,11 +621,17 @@ loop {
     }
   }
   
+  else if (toNumber(area[3]) < 60) {
+    Log("Last Minute ! No Trade Zone. Skipping this session.")
+  }
+  
   Log("Waiting for Next Session")
   loop {
     read_area(3)
-  } until (toNumber(area[3]) < 1 || toNumber(area[3] > 850))
+  } until (toNumber(area[3]) < 1 || toNumber(area[3]) > 850)
   Log("Loading New Session")
+  sleep 3000
+  click(point.f)
 }
 ```
 
