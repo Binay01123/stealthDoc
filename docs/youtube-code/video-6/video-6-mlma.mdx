@@ -87,7 +87,8 @@ LoadIndicator()
 ## Nightshark Code
 
 ```javascript
-triggerPoint := 85
+
+triggerPoint := 85 ; Trigger Price Point
 
 Log("Application Started !!")
 loop {
@@ -97,7 +98,7 @@ loop {
     read_areas()
   } until (toNumber(area[1]) > triggerPoint || toNumber(area[2]) > triggerPoint || toNumber(area[3]) < 60 )
   
-  if (toNumber(area[1]) > triggerPoint) {
+  if (toNumber(area[1]) > triggerPoint && toNumber(area[4]) = 0) {
   Log("UP triggered !! Placing Up Order")
   loop, 4{
       click(point.a)
@@ -114,7 +115,7 @@ loop {
     }  
   }
   
-  else if (toNumber(area[2]) > triggerPoint) {
+  else if (toNumber(area[2]) > triggerPoint && toNumber(area[4] = 0)) {
   Log("Down triggered !! Placing Down Order")
       loop, 4 {
       click(point.b)
@@ -133,6 +134,10 @@ loop {
   
   else if (toNumber(area[3]) < 60) {
     Log("Last Minute ! No Trade Zone. Skipping this session.")
+  }
+  
+  else if (toNumber(area[4]) > 0) {
+    Log("Position already exists , skipping this session")
   }
   
   Log("Waiting for Next Session")
