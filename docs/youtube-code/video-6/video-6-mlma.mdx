@@ -92,6 +92,7 @@ triggerPoint := 85
 Log("Application Started !!")
 loop {
   Log("Monitoring UP & Down to hit Trigger Price > " . triggerPoint )
+    click(point.c)
   loop{
     read_areas()
   } until (toNumber(area[1]) > triggerPoint || toNumber(area[2]) > triggerPoint || toNumber(area[3]) < 60 )
@@ -100,12 +101,6 @@ loop {
   Log("UP triggered !! Placing Up Order")
   loop, 4{
       click(point.a)
-      sleep 200
-      click(point.c)
-      sleep 2000
-      click(point.d)
-      sleep 2000
-      click(point.e)
       sleep 4000
       read_areas()
       if (toNumber(area[4]) > 0) {
@@ -123,12 +118,6 @@ loop {
   Log("Down triggered !! Placing Down Order")
       loop, 4 {
       click(point.b)
-      sleep 200
-      click(point.c)
-      sleep 2000
-      click(point.d)
-      sleep 2000
-      click(point.e)
       sleep 4000
       read_areas()
       if (toNumber(area[4]) > 0) {
@@ -152,7 +141,7 @@ loop {
   } until (toNumber(area[3]) < 1 || toNumber(area[3]) > 850)
   Log("Loading New Session")
   sleep 3000
-  click(point.f)
+  click(point.c)
 }
 ```
 
