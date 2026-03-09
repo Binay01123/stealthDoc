@@ -103,7 +103,7 @@ Log("Monitoring UP & Down to hit Trigger Price > " . triggerPoint )
   loop{
     read_areas()
     sleep 50 ; Adding a small sleep to prevent excessive CPU usage
-  } until (toNumber(area[1]) > triggerPoint || toNumber(area[2]) > triggerPoint)
+  } until (toNumber(area[1]) > triggerPoint || toNumber(area[2]) > triggerPoint || is5SecBeforeQuarter() )
   
   if (toNumber(area[1]) > triggerPoint && toNumber(area[4]) = 0) {
     Log("UP triggered !! Placing Up Order")
@@ -220,10 +220,13 @@ is5SecBeforeQuarter() {
     minute := A_Min + 0
     second := A_Sec + 0
 
-    if (Mod(minute, 15) = 14 && second >= 55)
+    if (Mod(minute, 15) = 14 && second >= 55) {
+        Log("Last 5 second of session. waiting for new session")
         return true
-
+       }
+    else {
     return false
+    }
 }
 
 DoubleExitCheck() {
@@ -232,6 +235,7 @@ DoubleExitCheck() {
   value := Clipboard
   return value
 }
+
 
 ```
 ---
