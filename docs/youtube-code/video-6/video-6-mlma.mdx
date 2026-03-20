@@ -68,14 +68,12 @@ LoadIndicator() {
     SendInput, ^v
     Sleep 1200
     SendInput, allow pasting
-    Sleep 1000
-    SendInput, {Enter}
     Sleep 4000
+    SendInput, {Enter}
+    Sleep 3000
     SendInput, ^v
     SendInput, {Enter}
     Sleep 1000
-    Clipboard := ClipSaved
-    sleep 1200
     SendInput, ^+j
 }
 

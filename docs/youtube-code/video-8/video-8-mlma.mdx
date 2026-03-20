@@ -1,10 +1,11 @@
 ---
 id: video-8-mlma
-title: Video-8 MLMA
-sidebar_label: Video-8 MLMA
+title: Polymarket 15 Min Crypto Trading Bot
+sidebar_label: Video-8 Polymarket Bot
 sidebar_position: 9
-slug: /youtube-code/video-8-mlma
-draft: true
+slug: /youtube-code/video-8-polymarket-15-min-bot
+description: Polymarket 15-minute crypto up/down trading bot with built-in stop loss, time delay restrictions, and wallet response time handling. Fully automated bot for Polymarket's 15-minute crypto up/down markets with risk management and smart entry timing.
+keywords: [Polymarket trading bot, Polymarket 15 minute crypto, Polymarket automation, crypto up down bot, Polymarket stop loss, Polymarket time delay, wallet response time Polymarket, Polymarket crypto bot, 15 min crypto trading bot Polymarket, automated Polymarket trading, Polymarket up down trading, Polymarket bot stop loss, Polymarket wallet response, Polymarket 15 min bot]
 ---
 
 <!--
@@ -19,211 +20,249 @@ draft: true
   6. Paste your indicator and Nightshark code in the respective code blocks
 -->
 
-# Video-8 MLMA
+# Polymarket 15 Min Crypto Trading Bot
 
-This walkthrough shows how to automate trades by pairing TradingView’s Machine Learning Moving Average script with NightShark and Tradovate. Copy the Pine Script into TradingView, attach it to a clean chart, and inspect replay signals. Load the NightShark script, map buy, sell, and neutral zones, then mirror orders to Tradovate while considering risk controls and expanded monitoring for ongoing insights.
+Automated trading bot for Polymarket's 15-minute crypto up/down markets. Features built-in stop loss for risk management, time delay restrictions for smarter entry timing, and wallet response time handling to account for on-chain confirmation delays. Designed to monitor price action, place trades at high-probability trigger points, and manage positions across sessions.
 
-{/* ## YouTube Video
+ ## YouTube Video
 
-<div style={{textAlign: 'center', margin: '2rem 0'}}>
+{/* <div style={{textAlign: 'center', margin: '2rem 0'}}>
   <iframe
     width="100%"
-    height="617"
-    src="https://www.youtube.com/embed/yKKjG_o63u4"
+    height="100%"
+    src="https://www.youtube.com/embed/VIDEO_ID_HERE"
     title="YouTube video player"
     frameBorder="0"
     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
     allowFullScreen
     style={{maxWidth: '1097px', width: '100%', aspectRatio: '16/9', border: 'none'}}>
   </iframe>
-</div>
-*/}
+</div> */}
+
 
 
 ## Screen Map
 
-![Screen map showing TradingView, NightShark, and Tradovate](./2025-11-17-00-28-44.png)
+![Screen map showing Polymarket and NightShark](./2026-03-20-02-10-31.png) 
 
-## Indicator Code
 
-```python
-//@version=6
-indicator("Machine Learning Moving Average [LuxAlgo]", "LuxAlgo - Machine Learning Moving Average", overlay=true)
-//---------------------------------------------------------------------------------------------------------------------
-// Settings
-//---------------------------------------------------------------------------------------------------------------------
-window   = input.int(100, minval=0)
-forecast = input.int(0)
-sigma    = input.float(0.01, step=0.1, minval=0)
-
-mult = input.float(2, 'Multiplicative Factor', minval=0)
-src  = input.source(close, 'Source')
-
-// Style
-upCss   = input.color(color.new(#5b9cf6, 50), 'Upper Extremity', group='Style')
-dnCss   = input.color(color.new(#e91e63, 50), 'Lower Extremity', group='Style')
-
-bullCss = input.color(#3179f5, 'Moving Average', inline='ma', group='Style')
-bearCss = input.color(#e91e63, '', inline='ma', group='Style')
-
-//---------------------------------------------------------------------------------------------------------------------
-// Functions
-//---------------------------------------------------------------------------------------------------------------------
-rbf(x1, x2, l) => math.exp(-math.pow(x1 - x2, 2) / (2.0 * math.pow(l, 2)))
-
-kernel_matrix(X1, X2, l) =>
-    km = matrix.new<float>(array.size(X1), array.size(X2))
-
-    i = 0
-    for x1 in X1
-        j = 0
-        for x2 in X2
-            rbf_val = rbf(x1, x2, l)
-            matrix.set(km, i, j, rbf_val)
-            j += 1
-        i += 1
-    km
-
-//---------------------------------------------------------------------------------------------------------------------
-// Kernel Setup
-//---------------------------------------------------------------------------------------------------------------------
-var identity = matrix.new<int>(window, window, 0)
-var K_row = array.new_float(0)
-
-if barstate.isfirst
-    var xtrain = array.new_int(0)
-    var xtest  = array.new_int(0)
-
-    // Build identity matrix and training array
-    for i = 0 to window - 1
-        for j = 0 to window - 1
-            matrix.set(identity, i, j, i == j ? 1 : 0)
-        array.push(xtrain, i)
-    
-    // Build testing array
-    for i = 0 to window + forecast - 1
-        array.push(xtest, i)
-    
-    // Compute kernel matrices
-    s      = matrix.mult(identity, sigma * sigma)
-    Ktrain = matrix.sum(kernel_matrix(xtrain, xtrain, window), s)
-    K_inv  = matrix.pinv(Ktrain)
-    K_star = kernel_matrix(xtrain, xtest, window)
-    // Multiply the transpose of K_star by K_inv and get the (window+forecast-1)th row as an array
-    K_row_temp = matrix.row(matrix.mult(matrix.transpose(K_star), K_inv), window + forecast - 1)
-    // Copy the computed row to K_row
-    for i = 0 to array.size(K_row_temp) - 1
-        array.push(K_row, array.get(K_row_temp, i))
-
-//---------------------------------------------------------------------------------------------------------------------
-// Moving Average Calculation
-//---------------------------------------------------------------------------------------------------------------------
-var os = 0
-
-mean = ta.sma(src, window)
-
-// Get end point estimate
-var float out = na
-
-if bar_index > window
-    dotprod = 0.0
-    // Dot product between last K_row and training data
-    for i = 0 to window - 1
-        dotprod += array.get(K_row, i) * (src[window - 1 - i] - mean)
-    // Output
-    out := dotprod + mean
-
-mae   = ta.sma(math.abs(src - out), window) * mult
-upper = out + mae
-lower = out - mae
-
-os := close > upper and out > out[1] ? 1 : close < lower and out < out[1] ? 0 : os
-
-//---------------------------------------------------------------------------------------------------------------------
-// Plotting
-//---------------------------------------------------------------------------------------------------------------------
-plot_out = plot(out, 'End Point GPR', color = os == 1 ? bullCss : bearCss)
-plot_change = plot(os != os[1] ? out : na, 'Circle', color = os == 1 ? bullCss : bearCss, linewidth = 3, style = plot.style_circles)
-plot_upper  = plot(upper, 'Upper', color = na)
-plot_lower  = plot(lower, 'Lower', color = na)
-
-fill(plot_upper, plot_out, out + mae, out, upCss, color.new(chart.bg_color, 100))
-fill(plot_out, plot_lower, out, out - mae, color.new(chart.bg_color, 100), dnCss)
-
-//---------------------------------------------------------------------------------------------------------------------
-// Table Setup
-//---------------------------------------------------------------------------------------------------------------------
-// Create a table with 2 columns and 1 row in the top-right corner
-var table signalTable = table.new(position.top_right, 2, 1, border_width = 1, frame_color = color.black)
-
-// Determine the signal text
-signalText = close > upper and out > out[1] ? "BUY" : close < lower and out < out[1] ? "SELL" : "NONE"
-
-// Set background color: green for BUY, red for SELL, white for NONE
-bgColor    = close > upper and out > out[1] ? color.green : close < lower and out < out[1] ? color.red : color.white
-
-// Set text color: white for BUY/SELL, black for NONE
-textColor  = close > upper and out > out[1] ? color.white : close < lower and out < out[1] ? color.white : color.black
-
-// Update table cells on every bar
-table.cell(signalTable, 0, 0, "SIGNAL", text_color = color.white, text_size = size.large, bgcolor = color.gray)
-table.cell(signalTable, 1, 0, signalText, text_color = textColor, text_size = size.large, bgcolor = bgColor)
-```
-
-## Nightshark Code
+## HUD Code
 
 ```javascript
-;Machine learning Moving Average Code
 
+Script =
+(%
+(()=>{const t=document.getElementById("POLY_HUD");t&&t.remove(),window.__POLY_HUD_STATE__||(window.__POLY_HUD_STATE__={});const e=window.__POLY_HUD_STATE__;try{(e.observers||[]).forEach(t=>t.disconnect())}catch{}if(e.observers=[],e.abortController)try{e.abortController.abort()}catch{}e.abortController=new AbortController;const n=e.abortController.signal,o="#00ff66",i="__POLY_DOLLARS__",l="__POLY_HUD_POS__",r="__POLY_HUD_ZOOM__";let c=parseInt(localStorage.getItem(r),10)||16;let s=null,a=0;const u=(...t)=>t.forEach(t=>{try{t()}catch{}}),d=()=>{if(s)return;const t=Date.now()-a;t>=300?(a=Date.now(),u(U,N)):s=setTimeout(()=>{s=null,a=Date.now(),u(U,N)},300-t)},p=document.createElement("div");p.id="POLY_HUD",p.style.cssText=``\n    position: fixed;\n    top: 90px;\n    left: 90px;\n    z-index: 2147483647;\n    background: black;\n    border: 2px solid ${o};\n    border-radius: 12px;\n    padding: 12px;\n    font-family: monospace;\n    color: ${o};\n    user-select: none;\n    min-width: 391px;\n  ``;try{const t=JSON.parse(localStorage.getItem(l)||"null");t&&Number.isFinite(t.left)&&Number.isFinite(t.top)&&(p.style.left=``${t.left}px``,p.style.top=``${t.top}px``)}catch{}const f=localStorage.getItem(i)||"";p.innerHTML=``\n    <div id="hudHeader" style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;cursor:move">\n      <div style="opacity:.9;font-weight:700">POLY HUD</div>\n      <div style="display:flex;gap:10px">\n        <button id="dec">−</button>\n        <button id="inc">+</button>\n        <button id="copyPrice">COPY</button>\n        <button id="liveSession">LIVE SESSION</button>\n      </div>\n    </div>\n\n    <table id="tbl" style="border-collapse:collapse;font-size:${c}px;width:100%;text-align:center">\n      <tr>\n        <td style="border:1px solid ${o};padding:18px" id="aLabel">UP</td>\n        <td style="border:1px solid ${o};padding:18px" id="aPrice">--</td>\n      </tr>\n      <tr>\n        <td style="border:1px solid ${o};padding:18px" id="bLabel">DOWN</td>\n        <td style="border:1px solid ${o};padding:18px" id="bPrice">--</td>\n      </tr>\n    </table>\n\n    <div style="display:flex;gap:12px;margin-top:14px">\n      <button id="buyA" class="bigBuy">BUY UP</button>\n      <button id="buyB" class="bigBuy">BUY DOWN</button>\n    </div>\n\n    <div style="display:flex;gap:12px;margin-top:14px">\n      <button id="redeemBtn" class="bigBuy">REDEEM</button>\n    </div>\n\n    <div style="display:flex;gap:12px;margin-top:14px;align-items:center">\n      <input id="dollarsBox" placeholder="DOLLARS" value="${f.replace(/"/g,"&quot;")}"\n        style="\n          flex:1;\n          background:black;\n          color:${o};\n          border:1px solid ${o};\n          padding:12px 14px;\n          font-family:monospace;\n          outline:none;\n          font-size:16px;\n        "/>\n      <button id="fillDollars" class="fillBtn">FILL DOLLARS</button>\n    </div>\n\n    <div style="display:flex;gap:12px;margin-top:14px;align-items:center">\n      <div style="min-width:98px;opacity:0.9;font-weight:800">POSITION</div>\n      <div id="posBox" style="\n          flex:1;\n          border:2px solid ${o};\n          padding:18px 22px;\n          text-align:center;\n          letter-spacing:2px;\n          font-weight:900;\n          font-size: 20px;\n        ">0</div>\n    </div>\n\n    <div id="dbg" style="margin-top:12px;font-size:12px;opacity:0.85;text-align:left"></div>\n  ``,p.querySelectorAll("button").forEach(t=>{t.style.cssText=``\n      background:black;\n      color:${o};\n      border:1px solid ${o};\n      cursor:pointer;\n      font-family:monospace;\n      white-space:nowrap;\n    ``}),p.querySelector("#dec").style.padding="10px 14px",p.querySelector("#inc").style.padding="10px 14px",p.querySelector("#copyPrice").style.padding="10px 16px",p.querySelector("#liveSession").style.padding="10px 16px",p.querySelectorAll(".bigBuy").forEach(t=>{t.style.flex="1",t.style.padding="22px 18px",t.style.fontSize="20px",t.style.fontWeight="900",t.style.letterSpacing="1px"});const b=p.querySelector("#fillDollars");b.style.padding="12px 16px",b.style.fontSize="16px",b.style.fontWeight="800",document.body.appendChild(p);const y=p.querySelector("#dbg"),x=p.querySelector("#posBox"),S=p.querySelector("#tbl"),g=p.querySelector("#hudHeader"),m=p.querySelector("#aLabel"),L=p.querySelector("#bLabel"),v=p.querySelector("#aPrice"),w=p.querySelector("#bPrice"),E=t=>y.textContent=t;let h=!1,O=0,q=0;const P=()=>{try{localStorage.setItem(l,JSON.stringify({left:p.offsetLeft,top:p.offsetTop}))}catch{}};g.addEventListener("mousedown",t=>{t.target.closest("button")||t.target.closest("input")||(h=!0,O=t.clientX-p.offsetLeft,q=t.clientY-p.offsetTop,t.preventDefault())}),document.addEventListener("mousemove",t=>{h&&(p.style.left=t.clientX-O+"px",p.style.top=t.clientY-q+"px")},{signal:n}),document.addEventListener("mouseup",()=>{h&&(h=!1,P())},{signal:n}),window.addEventListener("blur",()=>{h&&(h=!1,P())},{signal:n}),p.querySelector("#inc").onclick=()=>{c+=2,S.style.fontSize=c+"px",localStorage.setItem(r,c)},p.querySelector("#dec").onclick=()=>{c=Math.max(10,c-2),S.style.fontSize=c+"px",localStorage.setItem(r,c)};const C=t=>new Promise(e=>setTimeout(e,t)),D=t=>(t||"").replace(/\s+/g," ").trim().toLowerCase();function $(t){if(!t)return!1;try{t.scrollIntoView({block:"center",inline:"center"})}catch{}const e=t.getBoundingClientRect(),n=Math.floor(e.left+e.width/2),o=Math.floor(e.top+e.height/2),i={bubbles:!0,cancelable:!0,composed:!0,view:window,clientX:n,clientY:o,screenX:n,screenY:o,button:0,buttons:1};try{return t.focus?.(),t.dispatchEvent(new PointerEvent("pointerdown",{...i,pointerId:1,pointerType:"mouse",isPrimary:!0})),t.dispatchEvent(new MouseEvent("mousedown",i)),t.dispatchEvent(new PointerEvent("pointerup",{...i,pointerId:1,pointerType:"mouse",isPrimary:!0})),t.dispatchEvent(new MouseEvent("mouseup",i)),t.dispatchEvent(new MouseEvent("click",i)),!0}catch{try{return t.click?.(),!0}catch{}return!1}}function _(){const t=[...document.querySelectorAll("button.trading-button")];let e=null,n=null;for(const o of t){if(p.contains(o))continue;if("blue"===o.dataset.color)continue;const t=D(o.textContent);!e&&/\bup/.test(t)&&(e=o),!n&&/\bdown/.test(t)&&(n=o)}return{aLabel:"UP",bLabel:"DOWN",aEl:e,bEl:n}}function I(t){if(!t)return null;const e=(t.textContent||"").match(/([\d.]+)\s*¢/);return e?String(Math.floor(parseFloat(e[1]))):null}function U(){const{aLabel:t,bLabel:n,aEl:o,bEl:i}=_();m.textContent=t,L.textContent=n,v.textContent=I(o)??"--",w.textContent=I(i)??"--",e.aEl=o,e.bEl=i,E(``Prices: Up=${v.textContent} Down=${w.textContent}``)}let Y=null;const A=p.querySelector("#buyA"),B=p.querySelector("#buyB");function N(){let t=function(){const t=document.querySelectorAll("h3");for(const e of t){if(p.contains(e))continue;if("Positions"!==(e.textContent||"").trim())continue;const t=e.closest("div");if(!t)continue;const n=t.querySelectorAll("div.whitespace-nowrap.text-sm");for(let t=0;t<n.length;t++){const e=(n[t].textContent||"").trim();if(/^up$/i.test(e)&&t+1<n.length){const e=(n[t+1].textContent||"").trim(),o=parseInt(e,10);if(!isNaN(o)&&o>0)return{qty:o,side:"up"}}if(/^down$/i.test(e)&&t+1<n.length){const e=(n[t+1].textContent||"").trim(),o=parseInt(e,10);if(!isNaN(o)&&o>0)return{qty:o,side:"down"}}}}return{qty:0,side:null}}();0===t.qty&&(t=function(){const t=document.querySelectorAll("span");for(const e of t){if(p.contains(e))continue;const t=(e.textContent||"").trim().match(/([\d.]+)\s+shares?/i);if(t){const n=Math.floor(parseFloat(t[1]));if(n<=0)continue;let o=null,i=e.parentElement;for(;i;){if(i.classList.contains("flex-1")){const t=i.parentElement;if(t){const e=[...t.children].filter(t=>t.classList.contains("flex-1"));2===e.length&&(o=0===e.indexOf(i)?"up":"down")}break}i=i.parentElement}return{qty:n,side:o}}}return{qty:0,side:null}}()),x.textContent=t.qty,Y=t.side,"up"===t.side?(A.textContent="SELL UP",B.textContent="BUY DOWN"):"down"===t.side?(A.textContent="BUY UP",B.textContent="SELL DOWN"):(A.textContent="BUY UP",B.textContent="BUY DOWN")}const k=p.querySelector("#dollarsBox");function T(t,e){const n=document.querySelector("#market-order-amount-input")||null;if(!n)return E(``${e}: amount input not found``);n.focus(),$(n),function(t,e){const n=Object.getPrototypeOf(t),o=Object.getOwnPropertyDescriptor(n,"value");o&&o.set?o.set.call(t,e):t.value=e}(n,t),n.dispatchEvent(new Event("input",{bubbles:!0})),n.dispatchEvent(new Event("change",{bubbles:!0})),n.blur(),E(``${e}: ${t}``)}function H(){const t=(k.value||"").trim();if(!t)return E("FILL DOLLARS: empty");const e=t.replace(/[^\d.]/g,"");if(!e)return E("FILL DOLLARS: invalid");T(e,"FILL DOLLARS")}function M(){const t=document.querySelectorAll('button[role="radio"]');for(const e of t)if(!p.contains(e)&&("SELL"===e.value||"sell"===D(e.textContent)))return e;return null}function z(){const t=document.querySelectorAll("button.trading-button");for(const e of t)if(!p.contains(e)&&"blue"===e.dataset.color)return e;return null}async function W(t,e=6e4){const n=Date.now();let o=100;for(;Date.now()-n<e;){const e=t();if(e)return e;await C(o),o=Math.min(1.5*o,1e3)}return null}async function F(t){const{aEl:e,bEl:n}=_(),o="UP"===t?e:n;if(!o)return E(``BUY ${t}: pill not found``);const i=function(){const t=document.querySelectorAll('button[role="radio"]');for(const e of t)if(!p.contains(e)&&("BUY"===e.value||"buy"===D(e.textContent)))return e;return null}();i&&"checked"!==i.dataset.state&&(E(``BUY ${t}: switching to Buy tab``),$(i),await C(300)),E(``BUY ${t}: select``),$(o),await C(200),E(``BUY ${t}: fill dollars``),H(),await C(300),E(``BUY ${t}: waiting for action button``);const l=await W(z);if(!l)return E(``BUY ${t}: action button not found``);E(``BUY ${t}: click action``),$(l),await C(500);const r=M();r&&$(r),E(``BUY ${t}: DONE``)}async function R(t){const{aEl:e,bEl:n}=_(),o="UP"===t?e:n;if(!o)return E(``SELL ${t}: pill not found``);const i=M();if(!i)return E(``SELL ${t}: Sell tab not found``);E(``SELL ${t}: switching to Sell tab``),$(i),await C(300),E(``SELL ${t}: select pill``),$(o),await C(300),E(``SELL ${t}: clicking Max``);const r=await W(()=>{const t=document.querySelectorAll("button");for(const e of t){if(p.contains(e))continue;if(/^max$/i.test((e.textContent||"").trim()))return e}return null},5e3);if(!r)return E(``SELL ${t}: Max button not found``);$(r),await C(300),E(``SELL ${t}: waiting for action button``);const l=await W(z);if(!l)return E(``SELL ${t}: action button not found``);E(``SELL ${t}: click action``),$(l),E(``SELL ${t}: DONE``)}function V(){const t=function(){const t=document.querySelector('button[aria-label="Go to live market"]');return t&&!p.contains(t)?t:null}();if(!t)return E("LIVE SESSION: no live session found");E("LIVE SESSION: clicking "+(t.textContent||"").trim()),$(t)}function X(){const t=document.querySelectorAll("button");for(const e of t)if(!p.contains(e)&&"done"===D(e.textContent))return E("AUTO-DISMISS: clicking Done"),void $(e)}k.addEventListener("input",()=>localStorage.setItem(i,k.value)),p.querySelector("#fillDollars").onclick=()=>H(),A.onclick=()=>"up"===Y?R("UP"):F("UP"),B.onclick=()=>"down"===Y?R("DOWN"):F("DOWN");function Z1(){const t=document.querySelectorAll("button");for(const e of t){if(p.contains(e))continue;if(/\bcash\b/i.test((e.textContent||"").trim()))return e}return null}function Z2(){const t=document.querySelectorAll("button");for(const e of t){if(p.contains(e))continue;if(e.closest('[role="dialog"]'))continue;if(/^claim$/i.test((e.textContent||"").trim()))return e}return null}function Z3(){const t=document.querySelector('[role="dialog"]');if(!t)return null;const e=t.querySelectorAll("button");for(const n of e)if(/\bclaim\b/i.test(n.textContent))return n;return null}async function Z4(){E("REDEEM: clicking Cash button");const t=await W(Z1,5e3);if(!t)return E("REDEEM: Cash button not found");$(t),await C(500);E("REDEEM: waiting for Claim button");const e=await W(Z2,1e4);if(!e)return E("REDEEM: no claimable position found");$(e),await C(500);E("REDEEM: waiting for Claim dialog");const n=await W(Z3,1e4);if(!n)return E("REDEEM: Claim dialog not found");$(n),E("REDEEM: DONE")}p.querySelector("#redeemBtn").onclick=()=>Z4(),p.querySelector("#copyPrice").onclick=()=>{let t=null;if("up"===Y){const e=v.textContent.trim();"--"!==e&&(t=e)}else if("down"===Y){const e=w.textContent.trim();"--"!==e&&(t=e)}if(null===t)return E("COPY: no position to copy");navigator.clipboard.writeText(t).then(()=>E(``COPIED: ${t}``),()=>E("COPY: clipboard failed"))},p.querySelector("#liveSession").onclick=()=>V();const j=new MutationObserver(t=>{for(const e of t)if(!p.contains(e.target))return void d()});j.observe(document.body,{childList:!0,subtree:!0,characterData:!0}),e.observers.push(j),e.timerInterval&&clearInterval(e.timerInterval),e.timerInterval=setInterval(()=>{u(N,X)},1e3),d(),E("Poly HUD: ON")})();
+)
 
-StopScript() {
-    Send, {F2}
+LoadIndicator() {
+    global Script
+    Clipboard :=
+    Clipboard := Script
+    ClipWait, 1
+    Send , ^+j
+    Sleep 1200
+    Send , ^v
+    Sleep 1200
+    SendInput, allow pasting
+    Sleep 6000
+    Send , {Enter}
+    Sleep 3000
+    Send , ^v
+    Send, {Enter}
+    sleep 3000
+    ;Send, ^+j
 }
 
-BUY_condition() {
-    global
-    return (area[1] ~= "BUY")
-}
+click(point.a)
+LoadIndicator()
 
-SELL_condition() {
-    global
-    return (area[1] ~= "SELL")
-}
-
-longPosition:= 0
-shortPosition := 0
-loop {
-    loop{
-    read_areas()
-    } until (BUY_condition() || SELL_condition() )
-
-    if(BUY_condition() && longPosition <> 1) {
-        if(shortPosition = 1) {
-            click(point.a)
-            shortPosition:= 0
-            click(point.c)
-        }
-        else {
-            click(point.a)
-            longPosition := 1
-            click(point.c)
-        }
-    }
-
-    else if(SELL_condition() && shortPosition <> 1 ) {
-        if(longPosition = 1) {
-            click(point.b)
-            longPosition := 0
-            click(point.c)
-        }
-        else {
-            click(point.b)
-            shortPosition := 1
-            click(point.c)
-        }
-    }
-}
 ```
 
----
+## Nightshark TradingBot Code
 
+```javascript
+;=== THIS IS FOR POLYMARKET 15-MINUTE CRYPTO MARKET ONLY ====
+triggerPoint := 70 ; BUY Price Point
+exitPoint := 40 ; Stop Loss price point
+triggerMinute := 8 ; remaining minutes
+walletDelay := 3500 ; 3.5 seconds, you can adjust this based on your wallet response time
+
+Log("Application Started !!")
+loop {
+  click(point.c)
+  sleep 2000
+  if (Mod(A_Index, 1) = 0) {
+    Log("Redeeming REWARDS")
+    redeem()
+  }
+  Log("Waiting for trade window last " . triggerMinute . " Minutes")
+  loop {
+    if (isXMinRemaining(triggerMinute))
+        break
+    sleep 500
+  }
+Log("Monitoring UP & Down to hit Trigger Price > " . triggerPoint )
+  loop{
+    read_areas()
+    sleep 50 ; Adding a small sleep to prevent excessive CPU usage
+  } until (toNumber(area[1]) > triggerPoint || toNumber(area[2]) > triggerPoint || is5SecBeforeQuarter() )
+  
+  if (toNumber(area[1]) > triggerPoint && toNumber(area[3]) = 0) {
+    Log("UP triggered !! Placing Up Order")
+    loop, 4{
+        click(point.a)
+        sleep walletDelay
+        click(point.f) ; Wallet signature
+        sleep 4000
+        read_areas()
+        if (toNumber(area[3]) > 0) {
+          Log("UP position confirmed")
+          break
+        }
+        else {
+          Log("Position not confirmed ! Retrying ...")
+          sleep 1000
+        }
+      }
+      
+      if(toNumber(area[3]) > 0) {
+        Log("Monitoring StopLoss @" . exitPoint . " or Resolution")
+        loop {
+          read_areas()
+          if (toNumber(area[1]) < exitPoint) {
+            if(DoubleExitCheck() < exitPoint) {
+              break
+            }
+          }
+          sleep 50 ; Adding a small sleep to prevent excessive CPU usage
+        } until (is5SecBeforeQuarter()) 
+        if (toNumber(area[1]) < exitPoint && DoubleExitCheck() < exitPoint && toNumber(area[1]) > 2) {
+        Log("Stop Loss Triggered !! Closing UP Position")
+        loop, 4 {
+            click(point.a)
+            sleep walletDelay
+            click(point.f)
+            sleep 4000
+            read_areas()
+            if (toNumber(area[3]) = 0) {
+              Log("UP Position closed ")
+              break
+            }
+            else {
+              Log("Position not confirmed ! Retrying ...")
+              sleep 1000
+            }
+          }
+        }
+      }
+      else {
+        Log("Position did not filled on 4 retries ! Skipping to next session")
+      }
+  }
+  
+  else if (toNumber(area[2]) > triggerPoint && toNumber(area[3]) = 0) {
+  Log("Down triggered !! Placing Down Order")
+      loop, 4 {
+      click(point.b)
+      sleep walletDelay
+      click(point.f)
+      sleep 4000
+      read_areas()
+      if (toNumber(area[3]) > 0) {
+        Log("Down position confirmed")
+        break
+      } 
+      else {
+        Log("Position not confirmed ! Retrying ...")
+        sleep 1000
+      }
+    }
+    if(toNumber(area[3]) > 0) {
+      Log("Monitoring StopLoss @" . exitPoint . " or Resolution")
+        loop {
+          read_areas()
+          if (toNumber(area[2]) < exitPoint) {
+            if(DoubleExitCheck() < exitPoint) {
+              break
+            }
+          }
+          sleep 50 ; Adding a small sleep to prevent excessive CPU usage
+        } until (is5SecBeforeQuarter()) 
+      if (toNumber(area[2]) < exitPoint && DoubleExitCheck() < exitPoint && toNumber(area[2]) > 2) {
+        Log("Stop Loss Triggered !! Closing Down Position")
+        loop, 4 {
+            click(point.b)
+            sleep walletDelay
+            click(point.f)
+            sleep 4000
+            read_areas()
+            if (toNumber(area[3]) = 0) {
+              Log("Down Position closed ")
+              break
+            }
+            else {
+              Log("Position not confirmed ! Retrying ...")
+              sleep 1000
+            }
+          }
+      }
+    }
+      else {
+        Log("Position did not filled on 4 retries ! Skipping to next session")
+      }
+  }
+  
+  
+  else if (toNumber(area[3]) > 0) {
+    Log("Position already exists , skipping this session")
+  }
+  
+  Log("Waiting for Next Session")
+  loop {
+    sleep 100
+  } until (is5SecBeforeQuarter()) 
+  Log("Loading New session in 10 seconds !!")
+  sleep 6000
+}
+
+isXMinRemaining(x) {
+    currentMinute := A_Min + 0
+    remaining := 15 - Mod(currentMinute, 15)
+
+    if (remaining <= x)
+        return true
+    else
+        return false
+}
+
+
+is5SecBeforeQuarter() {
+    minute := A_Min + 0
+    second := A_Sec + 0
+
+    if (Mod(minute, 15) = 14 && second >= 55) {
+        Log("Last 5 second of session. waiting for new session")
+        return true
+       }
+    else {
+    return false
+    }
+}
+
+DoubleExitCheck() {
+  click(point.d)
+  sleep 1000
+  value := Clipboard
+  return value
+}
+
+redeem() {
+  click(point.e)
+  click(point.f)
+  sleep 6000
+  click(point.f)
+  Send, !{Left}
+}
+```
+---
