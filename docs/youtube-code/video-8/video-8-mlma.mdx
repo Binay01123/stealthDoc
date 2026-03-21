@@ -240,6 +240,12 @@ Log("Monitoring UP & Down to hit Trigger Price > " . triggerPoint )
     sleep 100
   } until (is5SecBeforeQuarter()) 
   sleep 6000
+  click(point.c)
+  sleep 1000
+
+  if (Mod(A_Index, 5) = 0) {
+    resetHUD()
+  }
 }
 
 isXMinRemaining(x) {
@@ -275,10 +281,28 @@ DoubleExitCheck() {
 
 redeem() {
   click(point.e)
+  sleep 500
   click(point.e)
-  sleep 6000
+  sleep 8000
   click(point.f)
   Send, !{Left}
+  sleep 2000
+  click(point.c)
 }
+
+resetHUD() {
+  Log("Refreshing the Page, 20 seconds delay")
+  SendInput, {F5}
+  sleep 20000
+  Log("Resetting HUD")
+  SendInput, ^+j
+  sleep 2500
+  SendInput,{Up}
+  sleep 2500
+  SendInput, {Enter}
+  sleep 2500
+  SendInput, ^+j
+}
+
 ```
 ---
