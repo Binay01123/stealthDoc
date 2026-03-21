@@ -92,8 +92,8 @@ Log("Application Started !!")
 loop {
   click(point.c)
   sleep 2000
-  if (Mod(A_Index, 1) = 0) {
-    Log("Redeeming REWARDS")
+  if (Mod(A_Index, 2) = 0) {
+    Log("===REDEEMING REWARDS===")
     redeem()
   }
   Log("Waiting for trade window last " . triggerMinute . " Minutes")
@@ -218,11 +218,10 @@ Log("Monitoring UP & Down to hit Trigger Price > " . triggerPoint )
     Log("Position already exists , skipping this session")
   }
   
-  Log("Waiting for Next Session")
+  Log("Waiting for end of Session")
   loop {
     sleep 100
   } until (is5SecBeforeQuarter()) 
-  Log("Loading New session in 10 seconds !!")
   sleep 6000
 }
 
@@ -242,7 +241,7 @@ is5SecBeforeQuarter() {
     second := A_Sec + 0
 
     if (Mod(minute, 15) = 14 && second >= 55) {
-        Log("Last 5 second of session. waiting for new session")
+        Log("Last 5 second. launching for new session")
         return true
        }
     else {
@@ -259,7 +258,7 @@ DoubleExitCheck() {
 
 redeem() {
   click(point.e)
-  click(point.f)
+  click(point.e)
   sleep 6000
   click(point.f)
   Send, !{Left}
