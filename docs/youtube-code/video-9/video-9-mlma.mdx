@@ -62,17 +62,21 @@ privatekey
 ; =========================
 ; Strategy Configuration
 ; =========================
-timeDelay := 9                ; activation window in minutes
-Entry := 0.85                 ; enter when side price >= 75c
+timeDelay := 8                ; activation window in remaining minutes
+Entry := 0.85                 ; enter when side price >= 85c
 Exit := 0.40                  ; stop/exit when entered side price < 40c
 assets := ["BTC"] ; assets to trade
-orderSize := 1               
+orderSize := 1
 
-; =========================
-; Kalshi Order API Config
-; =========================
+; =============================================================
+; Kalshi Order API Config 
+; DO NOT TOUCH BELOW VALUES UNLESS YOU KNOW WHAT YOU ARE DOING
+; =============================================================
 enableLiveOrders := true
-pollIntervalMs := 700    
+pollIntervalMs := 700
+restDelay := 600             ; ms to let order rest before checking position
+entryDiff := 0.02           
+exitDiff := 0.02  
 kalshiApiBase := "https://api.elections.kalshi.com"
 assetSeriesMap := { "BTC": "KXBTC15M", "ETH": "KXETH15M", "SOL": "KXSOL15M", "XRP": "KXXRP15M", "DOGE": "KXDOGE15M", "HYPE": "KXHYPE15M", "BNB": "KXBNB15M" }
 kalshiApiKeyId := ""
@@ -299,7 +303,7 @@ HasExistingPosition(marketTicker) {
 }
 
 PlaceKalshiOrder(action, marketTicker, side, price, size) {
-    global enableLiveOrders, kalshiApiKeyId, kalshiPrivateKeyPath
+    global enableLiveOrders, kalshiApiKeyId, kalshiPrivateKeyPath, restDelay, entryDiff, exitDiff
     if (!enableLiveOrders)
         return true
 
@@ -310,6 +314,10 @@ PlaceKalshiOrder(action, marketTicker, side, price, size) {
         return false
 
     isBuy := (ToLower(action) = "buy")
+    if (isBuy)
+        price := price + entryDiff
+    else
+        price := price - exitDiff
     apiAction := ToLower(action)
     apiSide := (side = "UP") ? "yes" : "no"
     cents := Round(price * 100)
@@ -338,11 +346,7 @@ PlaceKalshiOrder(action, marketTicker, side, price, size) {
     if (res.status != 201 && res.status != 200)
         return false
 
-    orderId := JsonField(res.body, "order_id")
-    if (orderId != "")
-        CancelKalshiOrder(orderId)
-    
-    Sleep 150
+    Sleep %restDelay%
     hasPos := HasExistingPosition(marketTicker)
     return (isBuy ? hasPos : !hasPos)
 }
