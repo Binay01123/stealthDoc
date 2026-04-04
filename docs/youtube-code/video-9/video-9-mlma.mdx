@@ -74,9 +74,9 @@ orderSize := 1
 ; =============================================================
 enableLiveOrders := true
 pollIntervalMs := 700
-restDelay := 600             ; ms to let order rest before checking position
-entryDiff := 0.02           
-exitDiff := 0.02  
+restDelay := 2000            ; ms to let order rest before checking position
+entryDiff := 0.02           ; added to price on BUY orders (aggressive entry)
+exitDiff := 0.02             ; subtracted from price on SELL orders (aggressive exit)    
 kalshiApiBase := "https://api.elections.kalshi.com"
 assetSeriesMap := { "BTC": "KXBTC15M", "ETH": "KXETH15M", "SOL": "KXSOL15M", "XRP": "KXXRP15M", "DOGE": "KXDOGE15M", "HYPE": "KXHYPE15M", "BNB": "KXBNB15M" }
 kalshiApiKeyId := ""
@@ -104,7 +104,13 @@ loop {
     for _, asset in assets {
         snapshot := GetKalshiMarketSnapshot(asset)
         if !IsObject(snapshot) {
-            LogOnce(asset, "NO_DATA", asset " Waiting for market data")
+            noDataKey := asset "|NO_DATA_" CurrentQuarterIndex()
+            if !IsObject(logOnceKeys)
+                logOnceKeys := {}
+            if !logOnceKeys.HasKey(noDataKey) {
+                logOnceKeys[noDataKey] := true
+                Log(asset " Waiting for market data")
+            }
             continue
         }
 
@@ -123,6 +129,7 @@ loop {
 
             if (snapshot.marketTicker != "" && HasExistingPosition(snapshot.marketTicker))
                 assetPhase[asset] := "HAS_POSITION"
+            continue
         }
 
         if IsObject(positions[asset]) {
@@ -141,6 +148,11 @@ loop {
                 Log(asset " Stop-loss triggered @ " Fmt(current) " < " Fmt(Exit))
                 sellConfirmed := false
                 loop, 4 {
+                    if (A_Index > 1) {
+                        freshSnap := GetKalshiMarketSnapshot(asset)
+                        if IsObject(freshSnap)
+                            current := (pos.side = "UP") ? freshSnap.up : freshSnap.down
+                    }
                     if SellPosition(asset, pos.side, current, "exit_below_" Exit) {
                         Log(asset " Position closed")
                         sellConfirmed := true
@@ -155,7 +167,7 @@ loop {
                     Log(asset " SELL FAILED after 4 retries")
                 positions.Delete(asset)
                 assetPhase[asset] := "STOPPED_OUT"
-                Log(asset " Stopped out, waiting for next session")
+                LogOnce(asset, "STOPPED_OUT", asset " Stopped out, waiting for next session")
             }
             continue
         }
@@ -222,6 +234,18 @@ loop {
         Log(asset " " side " triggered @ " Fmt(entryPrice) " — placing order")
         buyConfirmed := false
         loop, 4 {
+            if (A_Index > 1 && HasExistingPosition(snapshot.marketTicker)) {
+                Log(asset " Position detected before retry " A_Index ", skipping")
+                buyConfirmed := true
+                break
+            }
+            if (A_Index > 1) {
+                freshSnap := GetKalshiMarketSnapshot(asset)
+                if IsObject(freshSnap)
+                    entryPrice := (side = "UP") ? freshSnap.up : freshSnap.down
+                if (A_Index = 4)
+                    entryPrice := 0.97
+            }
             if BuyPosition(asset, snapshot.marketTicker, side, entryPrice) {
                 Log(asset " Position confirmed")
                 buyConfirmed := true
@@ -280,11 +304,11 @@ BuyPosition(asset, marketTicker, side, price) {
     return PlaceKalshiOrder("BUY", marketTicker, side, price, orderSize)
 }
 
-SellPosition(asset, side, price, reason) {
+SellPosition(asset, side, price, reason, clientOrderId := "") {
     global positions, orderSize
     if !IsObject(positions[asset]) || !positions[asset].HasKey("ticker")
         return true
-    return PlaceKalshiOrder("SELL", positions[asset].ticker, side, price, orderSize)
+    return PlaceKalshiOrder("SELL", positions[asset].ticker, side, price, orderSize, clientOrderId)
 }
 
 HasExistingPosition(marketTicker) {
@@ -302,7 +326,7 @@ HasExistingPosition(marketTicker) {
     return (qty != "" && Abs(qty + 0) > 0)
 }
 
-PlaceKalshiOrder(action, marketTicker, side, price, size) {
+PlaceKalshiOrder(action, marketTicker, side, price, size, clientOrderId := "") {
     global enableLiveOrders, kalshiApiKeyId, kalshiPrivateKeyPath, restDelay, entryDiff, exitDiff
     if (!enableLiveOrders)
         return true
@@ -317,7 +341,7 @@ PlaceKalshiOrder(action, marketTicker, side, price, size) {
     if (isBuy)
         price := price + entryDiff
     else
-        price := price - exitDiff
+        price := 0.01  ; IoC+reduce_only: sell at any price, exchange fills at best bid
     apiAction := ToLower(action)
     apiSide := (side = "UP") ? "yes" : "no"
     cents := Round(price * 100)
@@ -327,7 +351,9 @@ PlaceKalshiOrder(action, marketTicker, side, price, size) {
         cents := 99
 
     priceField := (apiSide = "yes") ? "yes_price" : "no_price"
-    clientOrderId := BuildClientOrderId(marketTicker, apiAction, apiSide)
+    reduceOnly := isBuy ? "" : """reduce_only"":true,""time_in_force"":""immediate_or_cancel"","
+    if (clientOrderId = "")
+        clientOrderId := BuildClientOrderId(marketTicker, apiAction, apiSide)
 
     payload := "{"
         . """ticker"":""" marketTicker ""","
@@ -336,6 +362,7 @@ PlaceKalshiOrder(action, marketTicker, side, price, size) {
         . """count"":" size ","
         . """type"":""limit"","
         . """" priceField """:" cents ","
+        . reduceOnly
         . """client_order_id"":""" clientOrderId """"
         . "}"
 
@@ -343,11 +370,27 @@ PlaceKalshiOrder(action, marketTicker, side, price, size) {
     if !IsObject(res)
         return false
 
+    orderId := JsonField(res.body, "order_id")
+
+    if (res.status = 401 || res.status = 403) {
+        Log("ERROR: API key or private key invalid (HTTP " res.status "). Please fix credentials and restart.")
+        stopCode()
+    }
+
     if (res.status != 201 && res.status != 200)
         return false
 
-    Sleep %restDelay%
+    if (isBuy)
+        Sleep %restDelay%
+    else
+        Sleep 150
+
     hasPos := HasExistingPosition(marketTicker)
+
+    ; For buys: cancel the order if position not yet confirmed so it can't fill later and cause a duplicate
+    if (isBuy && !hasPos && orderId != "")
+        CancelKalshiOrder(orderId)
+
     return (isBuy ? hasPos : !hasPos)
 }
 
@@ -397,7 +440,17 @@ StartupCredentialCheck() {
     sslReady := InStr(sslOut, "OpenSSL")
 
     if (apiReady && keyReady && sslReady) {
-        Log("Credentials processed successfully")
+        res := KalshiSignedRequest("GET", "/trade-api/v2/portfolio/balance")
+        if IsObject(res) && (res.status = 200) {
+            Log("Credentials processed successfully")
+            return
+        }
+        if IsObject(res) && (res.status = 401 || res.status = 403) {
+            Log("ERROR: API key or private key is incorrect (HTTP " res.status ")")
+            Log("Please fix your API key / private key and restart.")
+            stopCode()
+        }
+        Log("WARNING: Could not verify credentials (HTTP " (IsObject(res) ? res.status : "no response") ") — continuing anyway")
         return
     }
 
