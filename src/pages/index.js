@@ -9,6 +9,8 @@ import styles from './index.module.css';
 import Shuffle from '@site/src/components/Shuffle';
 import LetterGlitch from '@site/src/components/LetterGlitch';
 import DecryptedText from '@site/src/components/DecryptedText';
+import Lottie from 'lottie-react';
+import lottieCtaAnimation from '@site/static/img/lottieflow-cta-05-2-000000-easey.json';
 
 function HomepageHeader() {
   const {siteConfig} = useDocusaurusContext();
@@ -53,13 +55,14 @@ function HomepageHeader() {
         <div className={styles.buttons}>
           <Link
             className="button button--secondary button--lg"
-            to="/playground">
-            <img 
-              src="/img/playground-icon.svg" 
-              alt="Playground" 
-              style={{width: '24px', height: '24px', marginRight: '8px', verticalAlign: 'middle'}} 
+            to="/docs/youtube-code/video-6-Kalshi-15-Min">
+            <Lottie 
+              animationData={lottieCtaAnimation}
+              loop={true}
+              autoplay={true}
+              style={{width: '24px', height: '24px', marginRight: '8px', display: 'inline-block', verticalAlign: 'middle'}}
             />
-            Enter Playground
+            YT Scripts
           </Link>
           <Link
             className="button button--secondary button--lg"

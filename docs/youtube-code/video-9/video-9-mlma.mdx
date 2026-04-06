@@ -372,9 +372,10 @@ PlaceKalshiOrder(action, marketTicker, side, price, size, clientOrderId := "") {
 
     orderId := JsonField(res.body, "order_id")
 
+
     if (res.status = 401 || res.status = 403) {
-        Log("ERROR: API key or private key invalid (HTTP " res.status "). Please fix credentials and restart.")
-        stopCode()
+        Log("WARN: HTTP " res.status " on order submit, will retry")
+        return false
     }
 
     if (res.status != 201 && res.status != 200)
@@ -387,9 +388,13 @@ PlaceKalshiOrder(action, marketTicker, side, price, size, clientOrderId := "") {
 
     hasPos := HasExistingPosition(marketTicker)
 
-    ; For buys: cancel the order if position not yet confirmed so it can't fill later and cause a duplicate
-    if (isBuy && !hasPos && orderId != "")
+    if (isBuy && !hasPos && orderId != "") {
         CancelKalshiOrder(orderId)
+        Sleep 500
+        hasPos := HasExistingPosition(marketTicker)
+        if (hasPos)
+            Log(marketTicker " Order filled during cancel race, treating as confirmed")
+    }
 
     return (isBuy ? hasPos : !hasPos)
 }
