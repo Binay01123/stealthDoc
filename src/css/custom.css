@@ -196,6 +196,26 @@ button.clean-btn[aria-label="Toggle word wrap"] {
   font-weight: bold !important;
 }
 
+.theme-code-block button[data-copy-state="idle"]::before {
+  content: "Copy code" !important;
+}
+
+.theme-code-block button[data-copy-state="copying"]::before {
+  content: "Copying..." !important;
+  color: rgba(255, 255, 255, 0.9) !important;
+}
+
+.theme-code-block button[data-copy-state="copied"]::before {
+  content: "Copied" !important;
+  color: #00d600 !important;
+}
+
+.theme-code-block button[data-copy-state="copying"]::after,
+.theme-code-block button[data-copy-state="copied"]::after {
+  animation: none !important;
+  opacity: 0 !important;
+}
+
 /* Collapsible Code Block Styling */
 details.code-block-collapsible {
   margin-bottom: var(--ifm-leading);
