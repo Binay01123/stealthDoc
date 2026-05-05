@@ -86,7 +86,7 @@ kalshiPrivateKeyPath := ""
 kalshiApiKeyResolvedPath := ""
 kalshiPrivateKeyResolvedPath := ""
 kalshiKeyPassphrase := "" 
-kalshiOpenSSLPath := ""                 
+kalshiSignerPath := ""                 
 
 ; Track one open position per asset.
 positions := {}
@@ -95,8 +95,8 @@ assetSessionQuarter := {}     ; quarter index currently tracked per asset
 assetLastPriceLogTick := {}   ; throttled logging control
 
 LoadKalshiCredentialsFromFiles()
-if (kalshiOpenSSLPath = "")
-    kalshiOpenSSLPath := FindOpenSSL()
+if (kalshiSignerPath = "")
+    kalshiSignerPath := FindNightSharkSigner()
 Log("Application Started | Entry: " Entry " | Exit: " Exit " | Window: last " timeDelay "m")
 StartupCredentialCheck()
 
@@ -437,14 +437,14 @@ LoadKalshiCredentialsFromFiles() {
 }
 
 StartupCredentialCheck() {
-    global enableLiveOrders, kalshiApiKeyId, kalshiPrivateKeyPath, kalshiOpenSSLPath
+    global enableLiveOrders, kalshiApiKeyId, kalshiPrivateKeyPath, kalshiSignerPath
 
     apiReady := (kalshiApiKeyId != "")
     keyReady := (kalshiPrivateKeyPath != "" && FileExist(kalshiPrivateKeyPath))
-    sslOut := RunAndCapture(QuoteForCmd(kalshiOpenSSLPath) " version")
-    sslReady := InStr(sslOut, "OpenSSL")
+    signerOut := RunAndCapture(QuoteForCmd(kalshiSignerPath) " version")
+    signerReady := InStr(signerOut, "NightShark Signer")
 
-    if (apiReady && keyReady && sslReady) {
+    if (apiReady && keyReady && signerReady) {
         res := KalshiSignedRequest("GET", "/trade-api/v2/portfolio/balance")
         if IsObject(res) && (res.status = 200) {
             Log("Credentials processed successfully")
@@ -463,8 +463,8 @@ StartupCredentialCheck() {
         Log("ERROR: API key not loaded")
     if (!keyReady)
         Log("ERROR: Private key not loaded")
-    if (!sslReady)
-        Log("ERROR: OpenSSL not found")
+    if (!signerReady)
+        Log("ERROR: NightShark signer not found")
     Log("Please fix API credentials. Stopping script.")
     stopCode()
 }
@@ -549,46 +549,25 @@ KalshiSignedRequest(method, endpointPath, bodyJson := "") {
 }
 
 SignKalshiMessage(message) {
-    global kalshiPrivateKeyPath, kalshiKeyPassphrase, kalshiOpenSSLPath
+    global kalshiPrivateKeyPath, kalshiKeyPassphrase, kalshiSignerPath
     if (kalshiPrivateKeyPath = "" || !FileExist(kalshiPrivateKeyPath))
-        return ""
-
-    tempDir := A_Temp
-    if (tempDir = "")
-        tempDir := A_ScriptDir
-    tempDir := tempDir "\kalshi_ahk"
-    FileCreateDir, %tempDir%
-
-    uid := A_TickCount
-    msgFile := tempDir "\msg_" uid ".txt"
-    sigFile := tempDir "\sig_" uid ".bin"
-    FileDelete, %msgFile%
-    FileDelete, %sigFile%
-    FileAppend, %message%, %msgFile%
-
-    if (!FileExist(msgFile))
         return ""
 
     passArg := ""
     if (kalshiKeyPassphrase != "")
-        passArg := " -passin pass:" QuoteForCmd(kalshiKeyPassphrase)
+        passArg := " --passphrase " QuoteForCmd(kalshiKeyPassphrase)
 
-    signCmd := QuoteForCmd(kalshiOpenSSLPath)
-        . " dgst -sha256 -sigopt rsa_padding_mode:pss -sigopt rsa_pss_saltlen:digest -sign "
+    signCmd := QuoteForCmd(kalshiSignerPath)
+        . " sign --key "
         . QuoteForCmd(kalshiPrivateKeyPath)
+        . " --message "
+        . QuoteForCmd(message)
         . passArg
-        . " -out " QuoteForCmd(sigFile) " " QuoteForCmd(msgFile)
 
-    RunAndCapture(signCmd)
-    if (!FileExist(sigFile))
+    out := Trim(RunAndCapture(signCmd))
+    if (SubStr(out, 1, 6) = "ERROR:")
         return ""
-
-    b64Cmd := QuoteForCmd(kalshiOpenSSLPath) " base64 -A -in " QuoteForCmd(sigFile)
-    b64 := Trim(RunAndCapture(b64Cmd))
-
-    FileDelete, %msgFile%
-    FileDelete, %sigFile%
-    return b64
+    return out
 }
 
 BuildClientOrderId(ticker, action, side) {
@@ -624,14 +603,7 @@ QuoteForCmd(s) {
 }
 
 RunAndCapture(command) {
-    shell := ComObjCreate("WScript.Shell")
-    exec := shell.Exec("cmd.exe /S /C """ command """")
-    output := ""
-    while !exec.StdOut.AtEndOfStream
-        output .= exec.StdOut.ReadLine() "`n"
-    while !exec.StdErr.AtEndOfStream
-        output .= exec.StdErr.ReadLine() "`n"
-    return output
+    return RunCMD(command, A_ScriptDir)
 }
 
 ToLower(s) {
@@ -639,32 +611,18 @@ ToLower(s) {
     return out
 }
 
-FindOpenSSL() {
-    candidates := [ "C:\Program Files\Git\usr\bin\openssl.exe"
-        , "C:\Program Files\Git\mingw64\bin\openssl.exe"
-        , "C:\Program Files (x86)\Git\usr\bin\openssl.exe"
-        , "C:\OpenSSL-Win64\bin\openssl.exe"
-        , "C:\OpenSSL-Win32\bin\openssl.exe"
-        , "C:\Program Files\OpenSSL-Win64\bin\openssl.exe"
-        , "C:\Program Files (x86)\OpenSSL-Win32\bin\openssl.exe"
-        , "C:\Windows\System32\openssl.exe" ]
+FindNightSharkSigner() {
+    candidates := [ A_ScriptDir "\nightshark-signer.exe"
+        , A_ScriptDir "/nightshark-signer.exe"
+        , A_WorkingDir "\nightshark-signer.exe"
+        , A_WorkingDir "/nightshark-signer.exe" ]
 
     for _, p in candidates {
         if FileExist(p)
             return p
     }
 
-    whereOut := Trim(RunAndCapture("where openssl.exe"))
-    if (whereOut != "" && !InStr(whereOut, "not find")) {
-        Loop, Parse, whereOut, `n, `r
-        {
-            line := Trim(A_LoopField)
-            if (line != "" && FileExist(line))
-                return line
-        }
-    }
-
-    return "openssl"
+    return A_ScriptDir "\nightshark-signer.exe"
 }
 
 CanPlaceOrderNow(asset) {
@@ -771,6 +729,7 @@ GetKalshiMarketSnapshot(asset, maxRetries := 4) {
     return false
 }
 
+
 GetFirstNonEmptyJsonField(json, fields, skipZero := false) {
     for _, field in fields {
         val := JsonField(json, field)
@@ -823,4 +782,5 @@ IsoUtcToAhk(iso) {
         return ""
     return m1 m2 m3 m4 m5 m6
 }
+
 ```
