@@ -4,19 +4,21 @@
 }
 
 .copyButton[aria-disabled='true'] {
-  cursor: wait;
+  cursor: pointer;
 }
 
 .copyButtonIcons {
   position: relative;
+  order: 2;
   width: 1.125rem;
   height: 1.125rem;
   flex: 0 0 1.125rem;
+  z-index: 1;
 }
 
 .copyButtonIcon,
 .copyButtonSuccessIcon,
-.copyButtonSpinner {
+.spinner {
   position: absolute;
   top: 0;
   left: 0;
@@ -39,9 +41,10 @@
   color: #00d600;
 }
 
-.copyButtonSpinner {
+.spinner {
   color: #69717d;
   font-size: 1.125rem;
+  display: inline-block;
   transform: scale(0.33);
   opacity: 0;
 }
@@ -124,7 +127,7 @@
   opacity: 0;
 }
 
-.copyButtonCopying .copyButtonSpinner {
+.copyButtonCopying .spinner {
   transform: scale(1);
   opacity: 1;
 }

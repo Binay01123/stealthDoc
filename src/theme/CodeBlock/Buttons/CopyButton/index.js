@@ -8,6 +8,7 @@ import IconSuccess from '@theme/Icon/Success';
 import styles from './styles.module.css';
 
 const copiedDelay = 1000;
+const spinnerBladeCount = 12;
 
 function title() {
   return translate({
@@ -113,10 +114,10 @@ function useCopyButton() {
   return {copyCode, copyState};
 }
 
-function CopySpinner() {
+function SpinnerBladeLoader() {
   return (
-    <span className={styles.copyButtonSpinner} aria-hidden="true">
-      {Array.from({length: 12}, (_, index) => (
+    <span className={styles.spinner} aria-hidden="true">
+      {Array.from({length: spinnerBladeCount}, (_, index) => (
         <span className={styles.spinnerBlade} key={index} />
       ))}
     </span>
@@ -143,7 +144,7 @@ export default function CopyButton({className}) {
       onClick={copyCode}>
       <span className={styles.copyButtonIcons} aria-hidden="true">
         <IconCopy className={styles.copyButtonIcon} />
-        <CopySpinner />
+        <SpinnerBladeLoader />
         <IconSuccess className={styles.copyButtonSuccessIcon} />
       </span>
     </Button>
