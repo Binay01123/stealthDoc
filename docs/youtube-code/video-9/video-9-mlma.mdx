@@ -771,31 +771,6 @@ GetKalshiMarketSnapshot(asset, maxRetries := 4) {
     return false
 }
 
-HttpGet(url) {
-    global httpGetObj
-    if !IsObject(httpGetObj)
-        httpGetObj := ComObjCreate("WinHttp.WinHttpRequest.5.1")
-    http := httpGetObj
-    http.Option(9) := 2048 | 8192
-    http.Open("GET", url, false)
-    http.SetRequestHeader("User-Agent", "Mozilla/5.0")
-    http.SetRequestHeader("Cache-Control", "no-cache, no-store, must-revalidate")
-    http.SetRequestHeader("Pragma", "no-cache")
-    http.SetTimeouts(1000, 1000, 1000, 1500)
-
-    try {
-        http.Send()
-    } catch e {
-        httpGetObj := ""
-        return ""
-    }
-
-    if (http.Status != 200)
-        return ""
-
-    return http.ResponseText
-}
-
 GetFirstNonEmptyJsonField(json, fields, skipZero := false) {
     for _, field in fields {
         val := JsonField(json, field)
