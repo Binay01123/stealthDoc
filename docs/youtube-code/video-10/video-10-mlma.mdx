@@ -1,9 +1,9 @@
 ---
-id: video-10-kashi-v4
-title: "Video 10: Kashi Trading Bot v4"
-sidebar_label: "Video 10: Kashi Trading Bot v4"
+id: video-10-kalshi-v4
+title: "Video 10: Kalshi Trading Bot v4"
+sidebar_label: "Video 10: Kalshi Trading Bot v4"
 sidebar_position: 11
-slug: /youtube-code/video-10-kashi-v4
+slug: /youtube-code/video-10-kalshi-v4
 ---
 
 <!--
@@ -18,11 +18,11 @@ slug: /youtube-code/video-10-kashi-v4
   6. Paste your indicator and Nightshark code in the respective code blocks
 -->
 
-# Video 10: Kashi Trading Bot Version 4
+# Video 10: Kalshi Trading Bot Version 4
 
 This fourth iteration expands the Version 3 Kalshi backend approach with two new capabilities: **multi-agent execution** and **delta-aware entries**. Version 3 moved order routing away from the front end and into Kalshi's backend API. Version 4 keeps that foundation, then extends it so the bot can evaluate several Kalshi 15 minute crypto markets in parallel across different assets while also accounting for how far the underlying market price is from the current target.
 
-![Kashi Trading Bot Version 4](./Kalshi-Version-4-poster.png)
+![Kalshi Trading Bot Version 4](./Kalshi-Version-4-poster.png)
 
 ## Version 4 Focus
 
@@ -65,15 +65,14 @@ privatekey
 ## Nightshark Code
 
 ```python
-
 ; =========================
 ; Strategy Configuration
 ; =========================
 timeDelay := 8               ; activation window in minutes
-Entry := 0.85                ; enter when side price >= 75c
+Entry := 0.85                ; enter when side price >= 85c
 Exit := 0.40                  ; stop/exit when entered side price < 40c
 Delta := 0                   ; min |open15m - price| required alongside Entry
-assets := ["BTC"] ; assets to trade
+assets := ["BTC"]            ; Options ["ETH"] ,["SOL"] ,["XRP"] , ["HYPE"] , ["BNB"] , ["DOGE"] 
 orderSize := 1
 
 ; =============================================================
