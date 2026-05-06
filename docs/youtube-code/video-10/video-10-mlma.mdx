@@ -1,10 +1,9 @@
 ---
-id: video-10-mlma
-title: Video-10 MLMA
-sidebar_label: Video-10 MLMA
+id: video-10-kashi-v4
+title: "Video 10: Kashi Trading Bot v4"
+sidebar_label: "Video 10: Kashi Trading Bot v4"
 sidebar_position: 11
-slug: /youtube-code/video-10-mlma
-draft: true
+slug: /youtube-code/video-10-kashi-v4
 ---
 
 <!--
@@ -19,9 +18,24 @@ draft: true
   6. Paste your indicator and Nightshark code in the respective code blocks
 -->
 
-# Video-10 MLMA
+# Video 10: Kashi Trading Bot Version 4
 
-This walkthrough shows how to automate trades by pairing TradingView’s Machine Learning Moving Average script with NightShark and Tradovate. Copy the Pine Script into TradingView, attach it to a clean chart, and inspect replay signals. Load the NightShark script, map buy, sell, and neutral zones, then mirror orders to Tradovate while considering risk controls and expanded monitoring for ongoing insights.
+This fourth iteration expands the Version 3 Kalshi backend approach with two new capabilities: **multi-agent execution** and **delta-aware entries**. Version 3 moved order routing away from the front end and into Kalshi's backend API. Version 4 keeps that foundation, then extends it so the bot can evaluate several Kalshi 15 minute crypto markets in parallel across different assets while also accounting for how far the underlying market price is from the current target.
+
+![Kashi Trading Bot Version 4](./Kalshi-Version-4-poster.png)
+
+## Version 4 Focus
+
+- **Multi-agent execution:** run the same trading logic across multiple assets in the Kalshi 15 minute crypto market so BTC, ETH, SOL, XRP, DOGE, HYPE, and BNB can each behave like their own bot lane.
+- **Delta:** incorporate the underlying price distance from the current price before taking a trade, so entries can consider both contract price and how far the underlying market still has to move.
+- **Version 3 foundation:** keep the backend API order routing, credential loading, retry handling, and position tracking from the previous version.
+
+:::tip Latest Nightshark Build Required
+This version requires downloading the latest Nightshark build.
+<a className="btn-nightshark-small" href="https://nightshark.io" target="_blank" rel="noopener noreferrer">
+  <span>Download Latest Nightshark</span>
+</a>
+:::
 
 {/* ## YouTube Video
 
@@ -39,191 +53,958 @@ This walkthrough shows how to automate trades by pairing TradingView’s Machine
 </div>
 */}
 
-
-## Screen Map
-
-![Screen map showing TradingView, NightShark, and Tradovate](./2025-11-17-00-28-44.png)
-
-## Indicator Code
-
-```python
-//@version=6
-indicator("Machine Learning Moving Average [LuxAlgo]", "LuxAlgo - Machine Learning Moving Average", overlay=true)
-//---------------------------------------------------------------------------------------------------------------------
-// Settings
-//---------------------------------------------------------------------------------------------------------------------
-window   = input.int(100, minval=0)
-forecast = input.int(0)
-sigma    = input.float(0.01, step=0.1, minval=0)
-
-mult = input.float(2, 'Multiplicative Factor', minval=0)
-src  = input.source(close, 'Source')
-
-// Style
-upCss   = input.color(color.new(#5b9cf6, 50), 'Upper Extremity', group='Style')
-dnCss   = input.color(color.new(#e91e63, 50), 'Lower Extremity', group='Style')
-
-bullCss = input.color(#3179f5, 'Moving Average', inline='ma', group='Style')
-bearCss = input.color(#e91e63, '', inline='ma', group='Style')
-
-//---------------------------------------------------------------------------------------------------------------------
-// Functions
-//---------------------------------------------------------------------------------------------------------------------
-rbf(x1, x2, l) => math.exp(-math.pow(x1 - x2, 2) / (2.0 * math.pow(l, 2)))
-
-kernel_matrix(X1, X2, l) =>
-    km = matrix.new<float>(array.size(X1), array.size(X2))
-
-    i = 0
-    for x1 in X1
-        j = 0
-        for x2 in X2
-            rbf_val = rbf(x1, x2, l)
-            matrix.set(km, i, j, rbf_val)
-            j += 1
-        i += 1
-    km
-
-//---------------------------------------------------------------------------------------------------------------------
-// Kernel Setup
-//---------------------------------------------------------------------------------------------------------------------
-var identity = matrix.new<int>(window, window, 0)
-var K_row = array.new_float(0)
-
-if barstate.isfirst
-    var xtrain = array.new_int(0)
-    var xtest  = array.new_int(0)
-
-    // Build identity matrix and training array
-    for i = 0 to window - 1
-        for j = 0 to window - 1
-            matrix.set(identity, i, j, i == j ? 1 : 0)
-        array.push(xtrain, i)
-    
-    // Build testing array
-    for i = 0 to window + forecast - 1
-        array.push(xtest, i)
-    
-    // Compute kernel matrices
-    s      = matrix.mult(identity, sigma * sigma)
-    Ktrain = matrix.sum(kernel_matrix(xtrain, xtrain, window), s)
-    K_inv  = matrix.pinv(Ktrain)
-    K_star = kernel_matrix(xtrain, xtest, window)
-    // Multiply the transpose of K_star by K_inv and get the (window+forecast-1)th row as an array
-    K_row_temp = matrix.row(matrix.mult(matrix.transpose(K_star), K_inv), window + forecast - 1)
-    // Copy the computed row to K_row
-    for i = 0 to array.size(K_row_temp) - 1
-        array.push(K_row, array.get(K_row_temp, i))
-
-//---------------------------------------------------------------------------------------------------------------------
-// Moving Average Calculation
-//---------------------------------------------------------------------------------------------------------------------
-var os = 0
-
-mean = ta.sma(src, window)
-
-// Get end point estimate
-var float out = na
-
-if bar_index > window
-    dotprod = 0.0
-    // Dot product between last K_row and training data
-    for i = 0 to window - 1
-        dotprod += array.get(K_row, i) * (src[window - 1 - i] - mean)
-    // Output
-    out := dotprod + mean
-
-mae   = ta.sma(math.abs(src - out), window) * mult
-upper = out + mae
-lower = out - mae
-
-os := close > upper and out > out[1] ? 1 : close < lower and out < out[1] ? 0 : os
-
-//---------------------------------------------------------------------------------------------------------------------
-// Plotting
-//---------------------------------------------------------------------------------------------------------------------
-plot_out = plot(out, 'End Point GPR', color = os == 1 ? bullCss : bearCss)
-plot_change = plot(os != os[1] ? out : na, 'Circle', color = os == 1 ? bullCss : bearCss, linewidth = 3, style = plot.style_circles)
-plot_upper  = plot(upper, 'Upper', color = na)
-plot_lower  = plot(lower, 'Lower', color = na)
-
-fill(plot_upper, plot_out, out + mae, out, upCss, color.new(chart.bg_color, 100))
-fill(plot_out, plot_lower, out, out - mae, color.new(chart.bg_color, 100), dnCss)
-
-//---------------------------------------------------------------------------------------------------------------------
-// Table Setup
-//---------------------------------------------------------------------------------------------------------------------
-// Create a table with 2 columns and 1 row in the top-right corner
-var table signalTable = table.new(position.top_right, 2, 1, border_width = 1, frame_color = color.black)
-
-// Determine the signal text
-signalText = close > upper and out > out[1] ? "BUY" : close < lower and out < out[1] ? "SELL" : "NONE"
-
-// Set background color: green for BUY, red for SELL, white for NONE
-bgColor    = close > upper and out > out[1] ? color.green : close < lower and out < out[1] ? color.red : color.white
-
-// Set text color: white for BUY/SELL, black for NONE
-textColor  = close > upper and out > out[1] ? color.white : close < lower and out < out[1] ? color.white : color.black
-
-// Update table cells on every bar
-table.cell(signalTable, 0, 0, "SIGNAL", text_color = color.white, text_size = size.large, bgcolor = color.gray)
-table.cell(signalTable, 1, 0, signalText, text_color = textColor, text_size = size.large, bgcolor = bgColor)
+## API key Filename
+```
+apikey
+```
+## Private Key Filename
+```
+privatekey
 ```
 
 ## Nightshark Code
 
-```javascript
-;Machine learning Moving Average Code
+```python
 
+; =========================
+; Strategy Configuration
+; =========================
+timeDelay := 8               ; activation window in minutes
+Entry := 0.85                ; enter when side price >= 75c
+Exit := 0.40                  ; stop/exit when entered side price < 40c
+Delta := 0                   ; min |open15m - price| required alongside Entry
+assets := ["BTC"] ; assets to trade
+orderSize := 1
 
-StopScript() {
-    Send, {F2}
-}
+; =============================================================
+; Kalshi Order API Config 
+; DO NOT TOUCH BELOW VALUES UNLESS YOU KNOW WHAT YOU ARE DOING
+; =============================================================
+enableLiveOrders := true
+pollIntervalMs := 700
+marketRefreshMs := 5000         ; refresh market/session metadata less often; orderbook still refreshes every loop
+priceRefreshMs := 1500          ; throttle live asset price calls used only for LogStream
+restDelay := 2000            ; ms to let order rest before checking position
+entryDiff := 0.02           ; added to price on BUY orders (aggressive entry)
+exitDiff := 0.02             ; subtracted from price on SELL orders (aggressive exit)    
+kalshiApiBase := "https://api.elections.kalshi.com"
+assetSeriesMap := { "BTC": "KXBTC15M", "ETH": "KXETH15M", "SOL": "KXSOL15M", "XRP": "KXXRP15M", "DOGE": "KXDOGE15M", "HYPE": "KXHYPE15M", "BNB": "KXBNB15M" }
+kalshiApiKeyId := ""
+kalshiApiKeyFile := "reactions/apikey.json"          
+kalshiPrivateKeyFile := "reactions/privatekey.json"  
+kalshiPrivateKeyPath := ""
+kalshiApiKeyResolvedPath := ""
+kalshiPrivateKeyResolvedPath := ""
+kalshiKeyPassphrase := "" 
+kalshiSignerPath := ""                 
 
-BUY_condition() {
-    global
-    return (area[1] ~= "BUY")
-}
+; Track one open position per asset.
+positions := {}
+assetPhase := {}              ; WAIT_WINDOW | MONITORING | IN_POSITION
+assetSessionQuarter := {}     ; quarter index currently tracked per asset
+assetLastPriceLogTick := {}   ; throttled logging control
+assetSnapshotCache := {}
+assetMarketRefreshTick := {}
+assetPriceCache := {}
+assetPriceRefreshTick := {}
 
-SELL_condition() {
-    global
-    return (area[1] ~= "SELL")
-}
+LoadKalshiCredentialsFromFiles()
+if (kalshiSignerPath = "")
+    kalshiSignerPath := FindNightSharkSigner()
+Log("Application Started | Entry: " Entry " | Exit: " Exit " | Delta: " Delta " | Window: last " timeDelay "m")
+StartupCredentialCheck()
 
-longPosition:= 0
-shortPosition := 0
 loop {
-    loop{
-    read_areas()
-    } until (BUY_condition() || SELL_condition() )
-
-    if(BUY_condition() && longPosition <> 1) {
-        if(shortPosition = 1) {
-            click(point.a)
-            shortPosition:= 0
-            click(point.c)
+    for _, asset in assets {
+        snapshot := GetKalshiMarketSnapshot(asset)
+        if !IsObject(snapshot) {
+            if (PositionSessionEnded(asset))
+                MarkHeldToResolution(asset)
+            noDataKey := asset "|NO_DATA_" CurrentQuarterIndex()
+            if !IsObject(logOnceKeys)
+                logOnceKeys := {}
+            if !logOnceKeys.HasKey(noDataKey) {
+                logOnceKeys[noDataKey] := true
+                Log(asset " Waiting for market data")
+            }
+            continue
         }
-        else {
-            click(point.a)
-            longPosition := 1
-            click(point.c)
+
+        up := snapshot.up
+        down := snapshot.down
+        ; Recompute minsLeft live from closeTime so cached snapshots reflect real elapsed time
+        minsLeft := SnapshotMinutesLeft(snapshot)
+        if (minsLeft = "")
+            minsLeft := MinutesRemainingInQuarter()
+        inEntryWindow := (minsLeft > 0 && minsLeft <= timeDelay)
+        sessionKey := (snapshot.marketTicker != "") ? snapshot.marketTicker : ((snapshot.closeTime != "") ? snapshot.closeTime : CurrentQuarterIndex())
+
+        if (PositionSessionEnded(asset, snapshot)) {
+            MarkHeldToResolution(asset)
+            continue
+        }
+
+        if (!assetSessionQuarter.HasKey(asset) || assetSessionQuarter[asset] != sessionKey) {
+            assetSessionQuarter[asset] := sessionKey
+            assetPhase[asset] := "WAIT_WINDOW"
+            assetLastPriceLogTick[asset] := 0
+            LogOnceReset(asset)
+            Log(asset " New session (" snapshot.marketTicker ")")
+
+            if (snapshot.marketTicker != "" && HasExistingPosition(snapshot.marketTicker))
+                assetPhase[asset] := "HAS_POSITION"
+            continue
+        }
+
+        if IsObject(positions[asset]) {
+            pos := positions[asset]
+            current := (pos.side = "UP") ? up : down
+            assetPhase[asset] := "IN_POSITION"
+            UpdateKalshiLogStream(asset, snapshot)
+
+            if (current < Exit) {
+                Log(asset " Stop-loss triggered @ " Fmt(current) " < " Fmt(Exit))
+                sellConfirmed := false
+                loop, 4 {
+                    if (A_Index > 1) {
+                        freshSnap := GetKalshiMarketSnapshot(asset)
+                        if IsObject(freshSnap)
+                            current := (pos.side = "UP") ? freshSnap.up : freshSnap.down
+                    }
+                    if SellPosition(asset, pos.side, current, "exit_below_" Exit) {
+                        Log(asset " Position closed")
+                        sellConfirmed := true
+                        break
+                    }
+                    if (A_Index < 4) {
+                        Log(asset " Sell retry " A_Index "/3")
+                        Sleep 1000
+                    }
+                }
+                if (!sellConfirmed)
+                    Log(asset " SELL FAILED after 4 retries")
+                positions.Delete(asset)
+                assetPhase[asset] := "STOPPED_OUT"
+                LogOnce(asset, "STOPPED_OUT", asset " Stopped out, waiting for next session")
+            }
+            continue
+        }
+
+        if (assetPhase[asset] = "STOPPED_OUT") {
+            LogOnce(asset, "STOPPED_OUT", asset " Stopped out, waiting for next session")
+            continue
+        }
+
+        if (assetPhase[asset] = "BUY_FAILED") {
+            LogOnce(asset, "BUY_FAILED", asset " Buy failed earlier, waiting for next session")
+            continue
+        }
+
+        if (assetPhase[asset] = "HAS_POSITION") {
+            LogOnce(asset, "HAS_POSITION", asset " Existing position, waiting for next session")
+            continue
+        }
+
+        ; --- Waiting for entry window ---
+        if (!inEntryWindow) {
+            if (minsLeft <= 0)
+                LogOnce(asset, "SESSION_ENDED", asset " End of session, waiting for new market")
+            else
+                LogOnce(asset, "WAIT_WINDOW", asset " Waiting for last " timeDelay " minutes")
+            assetPhase[asset] := "WAIT_WINDOW"
+            continue
+        }
+
+        ; --- Entry window open: monitoring prices ---
+        if (!assetPhase.HasKey(asset) || assetPhase[asset] != "MONITORING") {
+            assetPhase[asset] := "MONITORING"
+            Log(asset " Monitoring for entry > " Fmt(Entry) " | Delta >= " Delta)
+        }
+
+        ; Live price + LiveDelta (|open15m - price|) is only needed once a current session is ready to monitor.
+        LiveDelta := UpdateKalshiLogStream(asset, snapshot)
+
+        side := ""
+        entryPrice := ""
+        if (up >= Entry || down >= Entry) {
+            if (LiveDelta != "" && LiveDelta >= Delta) {
+                if (up >= down) {
+                    side := "UP"
+                    entryPrice := up
+                } else {
+                    side := "DOWN"
+                    entryPrice := down
+                }
+            } else {
+                LogOnce(asset, "DELTA_LOW", asset " LiveDelta " FmtOrNA(LiveDelta) " < Delta " Delta ", skipping entry")
+            }
+        }
+
+        if (side = "")
+            continue
+
+        if (entryPrice > 0.98) {
+            LogOnce(asset, "PRICE_HIGH", asset " Price too high (" entryPrice "), waiting for drop")
+            continue
+        }
+
+        if !CanPlaceOrderNow(asset) {
+            LogOnce(asset, "NO_CREDS", asset " Missing credentials, cannot place orders")
+            continue
+        }
+
+        if HasExistingPosition(snapshot.marketTicker) {
+            assetPhase[asset] := "HAS_POSITION"
+            Log(asset " Existing position found, waiting for next session")
+            continue
+        }
+
+        Log(asset " " side " triggered @ " Fmt(entryPrice) " — placing order")
+        buyConfirmed := false
+        loop, 4 {
+            if (A_Index > 1 && HasExistingPosition(snapshot.marketTicker)) {
+                Log(asset " Position detected before retry " A_Index ", skipping")
+                buyConfirmed := true
+                break
+            }
+            if (A_Index > 1) {
+                freshSnap := GetKalshiMarketSnapshot(asset)
+                if IsObject(freshSnap)
+                    entryPrice := (side = "UP") ? freshSnap.up : freshSnap.down
+                if (A_Index = 4)
+                    entryPrice := 0.97
+            }
+            if BuyPosition(asset, snapshot.marketTicker, side, entryPrice) {
+                Log(asset " Position confirmed")
+                buyConfirmed := true
+                break
+            }
+            if (A_Index < 4) {
+                Log(asset " Retry " A_Index "/3")
+                Sleep 1000
+            }
+        }
+
+        if (buyConfirmed) {
+            positions[asset] := { side: side, entry: entryPrice, ticker: snapshot.marketTicker, quarterIndex: CurrentQuarterIndex() }
+            assetPhase[asset] := "IN_POSITION"
+            assetLastPriceLogTick[asset] := 0
+            Log(asset " Monitoring stop-loss @ " Fmt(Exit))
+        } else {
+            assetPhase[asset] := "BUY_FAILED"
+            Log(asset " Order not filled after 4 attempts, skipping session")
         }
     }
 
-    else if(SELL_condition() && shortPosition <> 1 ) {
-        if(longPosition = 1) {
-            click(point.b)
-            longPosition := 0
-            click(point.c)
-        }
-        else {
-            click(point.b)
-            shortPosition := 1
-            click(point.c)
+    Random, pollJitterMs, 0, 250
+    sleepMs := pollIntervalMs + pollJitterMs
+    Sleep %sleepMs%
+}
+
+LogOnce(asset, reason, msg) {
+    global logOnceKeys
+    if !IsObject(logOnceKeys)
+        logOnceKeys := {}
+    key := asset "|" reason
+    if (logOnceKeys.HasKey(key))
+        return
+    logOnceKeys[key] := true
+    Log(msg)
+}
+
+LogOnceReset(asset) {
+    global logOnceKeys
+    if !IsObject(logOnceKeys)
+        return
+    toRemove := []
+    for k, _ in logOnceKeys {
+        if (InStr(k, asset "|") = 1)
+            toRemove.Push(k)
+    }
+    for _, k in toRemove
+        logOnceKeys.Delete(k)
+}
+
+PositionSessionEnded(asset, snapshot := "") {
+    global positions
+    if !IsObject(positions[asset])
+        return false
+
+    pos := positions[asset]
+    if (IsObject(snapshot) && snapshot.marketTicker != "" && pos.HasKey("ticker") && pos.ticker != "" && snapshot.marketTicker != pos.ticker)
+        return true
+    if (pos.HasKey("quarterIndex") && CurrentQuarterIndex() != pos.quarterIndex)
+        return true
+    return false
+}
+
+MarkHeldToResolution(asset) {
+    global positions, assetPhase
+    if !IsObject(positions[asset])
+        return
+
+    pos := positions[asset]
+    Log(asset " " pos.side " held to resolution")
+    positions.Delete(asset)
+    ClearKalshiMarketCache(asset)
+    assetPhase[asset] := "WAIT_WINDOW"
+}
+
+UpdateKalshiLogStream(asset, snapshot) {
+    if !IsObject(snapshot)
+        return ""
+
+    priceObj := GetCachedKalshiPriceObj(asset)
+    livePrice := (IsObject(priceObj) && priceObj.HasKey("price") && priceObj.price > 0) ? priceObj.price : ""
+    LiveDelta := ""
+    if (livePrice != "" && IsObject(priceObj) && priceObj.HasKey("open15m") && priceObj.open15m > 0)
+        LiveDelta := Abs(priceObj.open15m - livePrice)
+    LogMonitoringStream(asset, snapshot, livePrice, LiveDelta)
+    return LiveDelta
+}
+
+LogMonitoringStream(asset, snapshot, livePrice := "", LiveDelta := "") {
+    if !IsObject(snapshot)
+        return
+    if (livePrice != "")
+        LogStream(asset, FmtOrNA(livePrice))
+    else
+        LogStream(asset, "n/a")
+    LogStream("up", FmtOrNA(snapshot.up))
+    LogStream("down", FmtOrNA(snapshot.down))
+    LogStream("LIVE DELTA", FmtLiveDeltaOrNA(LiveDelta))
+}
+
+GetCachedKalshiPriceObj(asset) {
+    global assetPriceCache, assetPriceRefreshTick, priceRefreshMs
+    nowTick := A_TickCount
+
+    if (assetPriceCache.HasKey(asset) && assetPriceRefreshTick.HasKey(asset)) {
+        if ((nowTick - assetPriceRefreshTick[asset]) < priceRefreshMs)
+            return assetPriceCache[asset]
+    }
+
+    priceObj := GetKalshiPrice(asset)
+    assetPriceRefreshTick[asset] := nowTick
+    if (IsObject(priceObj) && priceObj.HasKey("price") && priceObj.price > 0) {
+        assetPriceCache[asset] := priceObj
+        return priceObj
+    }
+
+    if (assetPriceCache.HasKey(asset))
+        return assetPriceCache[asset]
+    return ""
+}
+
+GetCachedKalshiAssetPrice(asset) {
+    obj := GetCachedKalshiPriceObj(asset)
+    if (IsObject(obj) && obj.HasKey("price"))
+        return obj.price
+    return ""
+}
+
+FmtOrNA(price) {
+    if (price = "")
+        return "n/a"
+    return Fmt(price)
+}
+
+FmtLiveDeltaOrNA(value) {
+    if (value = "")
+        return "n/a"
+
+    value := value + 0
+    if (Abs(value) >= 1)
+        return Round(value, 2)
+    return Round(value, 4)
+}
+
+Fmt(price) {
+    return Round(price + 0, 2)
+}
+
+BuyPosition(asset, marketTicker, side, price) {
+    global orderSize
+    return PlaceKalshiOrder("BUY", marketTicker, side, price, orderSize)
+}
+
+SellPosition(asset, side, price, reason, clientOrderId := "") {
+    global positions, orderSize
+    if !IsObject(positions[asset]) || !positions[asset].HasKey("ticker")
+        return true
+    return PlaceKalshiOrder("SELL", positions[asset].ticker, side, price, orderSize, clientOrderId)
+}
+
+HasExistingPosition(marketTicker) {
+    if (marketTicker = "")
+        return false
+
+    res := KalshiSignedRequest("GET", "/trade-api/v2/portfolio/positions?ticker=" marketTicker)
+    if !IsObject(res) || (res.status != 200)
+        return false
+
+    qty := JsonField(res.body, "position_fp")
+    if (qty = "")
+        qty := JsonField(res.body, "market_exposure_dollars")
+
+    return (qty != "" && Abs(qty + 0) > 0)
+}
+
+PlaceKalshiOrder(action, marketTicker, side, price, size, clientOrderId := "") {
+    global enableLiveOrders, kalshiApiKeyId, kalshiPrivateKeyPath, restDelay, entryDiff, exitDiff
+    if (!enableLiveOrders)
+        return true
+
+    if (kalshiApiKeyId = "" || kalshiPrivateKeyPath = "")
+        return false
+
+    if (marketTicker = "")
+        return false
+
+    isBuy := (ToLower(action) = "buy")
+    if (isBuy)
+        price := price + entryDiff
+    else
+        price := 0.01  ; IoC+reduce_only: sell at any price, exchange fills at best bid
+    apiAction := ToLower(action)
+    apiSide := (side = "UP") ? "yes" : "no"
+    cents := Round(price * 100)
+    if (cents < 1)
+        cents := 1
+    else if (cents > 99)
+        cents := 99
+
+    priceField := (apiSide = "yes") ? "yes_price" : "no_price"
+    reduceOnly := isBuy ? "" : """reduce_only"":true,""time_in_force"":""immediate_or_cancel"","
+    if (clientOrderId = "")
+        clientOrderId := BuildClientOrderId(marketTicker, apiAction, apiSide)
+
+    payload := "{"
+        . """ticker"":""" marketTicker ""","
+        . """action"":""" apiAction ""","
+        . """side"":""" apiSide ""","
+        . """count"":" size ","
+        . """type"":""limit"","
+        . """" priceField """:" cents ","
+        . reduceOnly
+        . """client_order_id"":""" clientOrderId """"
+        . "}"
+
+    res := KalshiSignedRequest("POST", "/trade-api/v2/portfolio/orders", payload)
+    if !IsObject(res)
+        return false
+
+    orderId := JsonField(res.body, "order_id")
+
+
+    if (res.status = 401 || res.status = 403) {
+        Log("WARN: HTTP " res.status " on order submit, will retry")
+        return false
+    }
+
+    if (res.status != 201 && res.status != 200)
+        return false
+
+    if (isBuy)
+        Sleep %restDelay%
+    else
+        Sleep 150
+
+    hasPos := HasExistingPosition(marketTicker)
+
+    if (isBuy && !hasPos && orderId != "") {
+        CancelKalshiOrder(orderId)
+        Sleep 500
+        hasPos := HasExistingPosition(marketTicker)
+        if (hasPos)
+            Log(marketTicker " Order filled during cancel race, treating as confirmed")
+    }
+
+    return (isBuy ? hasPos : !hasPos)
+}
+
+CancelKalshiOrder(orderId) {
+    if (orderId = "")
+        return
+    KalshiSignedRequest("DELETE", "/trade-api/v2/portfolio/orders/" orderId)
+}
+
+LoadKalshiCredentialsFromFiles() {
+    global kalshiApiKeyId, kalshiApiKeyFile, kalshiPrivateKeyPath, kalshiPrivateKeyFile, kalshiApiKeyResolvedPath, kalshiPrivateKeyResolvedPath
+
+    kalshiApiKeyId := ""
+    kalshiApiKeyResolvedPath := ResolveCredentialPath(kalshiApiKeyFile)
+    if (kalshiApiKeyResolvedPath != "") {
+        FileRead, apiRaw, %kalshiApiKeyResolvedPath%
+        apiCode := JsonField(apiRaw, "code")
+        if (apiCode != "")
+            kalshiApiKeyId := Trim(JsonUnescape(apiCode))
+    }
+
+    kalshiPrivateKeyPath := ""
+    kalshiPrivateKeyResolvedPath := ResolveCredentialPath(kalshiPrivateKeyFile)
+    if (kalshiPrivateKeyResolvedPath != "") {
+        FileRead, keyRaw, %kalshiPrivateKeyResolvedPath%
+        keyCode := JsonField(keyRaw, "code")
+        if (keyCode != "") {
+            pemText := JsonUnescape(keyCode)
+            tempBase := A_Temp
+            if (tempBase = "")
+                tempBase := A_ScriptDir
+            tempPem := tempBase "\kalshi_ahk\privatekey_runtime.pem"
+            FileCreateDir, % tempBase "\kalshi_ahk"
+            FileDelete, %tempPem%
+            FileAppend, %pemText%, %tempPem%
+            kalshiPrivateKeyPath := tempPem
         }
     }
 }
+
+StartupCredentialCheck() {
+    global enableLiveOrders, kalshiApiKeyId, kalshiPrivateKeyPath, kalshiSignerPath
+
+    apiReady := (kalshiApiKeyId != "")
+    keyReady := (kalshiPrivateKeyPath != "" && FileExist(kalshiPrivateKeyPath))
+    signerOut := RunAndCapture(QuoteForCmd(kalshiSignerPath) " version")
+    signerReady := InStr(signerOut, "NightShark Signer")
+
+    if (apiReady && keyReady && signerReady) {
+        res := KalshiSignedRequest("GET", "/trade-api/v2/portfolio/balance")
+        if IsObject(res) && (res.status = 200) {
+            Log("Credentials processed successfully")
+            return
+        }
+        if IsObject(res) && (res.status = 401 || res.status = 403) {
+            Log("ERROR: API key or private key is incorrect (HTTP " res.status ")")
+            Log("Please fix your API key / private key and restart.")
+            stopCode()
+        }
+        Log("WARNING: Could not verify credentials (HTTP " (IsObject(res) ? res.status : "no response") ")")
+        Log("Please paste below link in browser to watch fix video")
+        Log("https://youtu.be/Es0vvpzyND4")
+        stopCode()
+    }
+
+    if (!apiReady)
+        Log("ERROR: API key not loaded")
+    if (!keyReady)
+        Log("ERROR: Private key not loaded")
+    if (!signerReady)
+        Log("ERROR: NightShark signer not found")
+    Log("Please fix API credentials. Stopping script.")
+    stopCode()
+}
+
+ResolveCredentialPath(pathSpec) {
+    if (pathSpec = "")
+        return ""
+
+    if FileExist(pathSpec)
+        return pathSpec
+
+    normalized := StrReplace(pathSpec, "\", "/")
+    if FileExist(normalized)
+        return normalized
+
+    relative := normalized
+    while (SubStr(relative, 1, 1) = "/" || SubStr(relative, 1, 1) = "\")
+        relative := SubStr(relative, 2)
+
+    fromScriptDir := A_ScriptDir "/" relative
+    if FileExist(fromScriptDir)
+        return fromScriptDir
+
+    fromScriptDirBackslash := StrReplace(fromScriptDir, "/", "\")
+    if FileExist(fromScriptDirBackslash)
+        return fromScriptDirBackslash
+
+    return ""
+}
+
+JsonUnescape(s) {
+    s := StrReplace(s, "\/", "/")
+    s := StrReplace(s, "\n", "`n")
+    s := StrReplace(s, "\r", "`r")
+    s := StrReplace(s, "\t", A_Tab)
+    s := StrReplace(s, Chr(92) Chr(34), Chr(34))
+    s := StrReplace(s, Chr(92) Chr(92), Chr(92))
+    return s
+}
+
+KalshiSignedRequest(method, endpointPath, bodyJson := "") {
+    global kalshiApiBase, kalshiApiKeyId
+    timestamp := CurrentTimeMillis()
+    signPath := endpointPath
+    if InStr(signPath, "?")
+        signPath := SubStr(signPath, 1, InStr(signPath, "?") - 1)
+
+    signature := SignKalshiMessage(timestamp method signPath)
+    if (signature = "")
+        return false
+
+    url := kalshiApiBase endpointPath
+    global httpSignedObj
+    if !IsObject(httpSignedObj)
+        httpSignedObj := ComObjCreate("WinHttp.WinHttpRequest.5.1")
+    http := httpSignedObj
+    http.Option(9) := 2048 | 8192
+    http.Open(method, url, false)
+    http.SetTimeouts(1000, 1000, 3000, 5000)
+    http.SetRequestHeader("User-Agent", "Mozilla/5.0")
+    http.SetRequestHeader("Cache-Control", "no-cache, no-store")
+    http.SetRequestHeader("Pragma", "no-cache")
+    http.SetRequestHeader("KALSHI-ACCESS-KEY", kalshiApiKeyId)
+    http.SetRequestHeader("KALSHI-ACCESS-TIMESTAMP", timestamp)
+    http.SetRequestHeader("KALSHI-ACCESS-SIGNATURE", signature)
+    http.SetRequestHeader("Content-Type", "application/json")
+
+    try {
+        if (bodyJson != "")
+            http.Send(bodyJson)
+        else
+            http.Send()
+    } catch e {
+        httpSignedObj := ""
+        return false
+    }
+
+    obj := {}
+    obj.status := http.Status
+    obj.body := http.ResponseText
+    return obj
+}
+
+SignKalshiMessage(message) {
+    global kalshiPrivateKeyPath, kalshiKeyPassphrase, kalshiSignerPath
+    if (kalshiPrivateKeyPath = "" || !FileExist(kalshiPrivateKeyPath))
+        return ""
+
+    passArg := ""
+    if (kalshiKeyPassphrase != "")
+        passArg := " --passphrase " QuoteForCmd(kalshiKeyPassphrase)
+
+    signCmd := QuoteForCmd(kalshiSignerPath)
+        . " sign --key "
+        . QuoteForCmd(kalshiPrivateKeyPath)
+        . " --message "
+        . QuoteForCmd(message)
+        . passArg
+
+    out := Trim(RunAndCapture(signCmd))
+    if (SubStr(out, 1, 6) = "ERROR:")
+        return ""
+    return out
+}
+
+BuildClientOrderId(ticker, action, side) {
+    nowUtc := CurrentUtcNowAhk()
+    if (nowUtc = "")
+        nowUtc := A_Now
+    Random, r, 100000, 999999
+    return ticker "-" action "-" side "-" nowUtc "-" A_TickCount "-" r
+}
+
+CurrentTimeMillis() {
+    epoch := CurrentUtcNowAhk()
+    if (epoch = "")
+        return ""
+    EnvSub, epoch, 19700101000000, Seconds
+    return epoch * 1000
+}
+
+CurrentUtcNowAhk() {
+    nowUtc := A_NowUTC
+    if (nowUtc != "")
+        return nowUtc
+
+    out := Trim(RunAndCapture("powershell -NoProfile -Command ""[DateTime]::UtcNow.ToString('yyyyMMddHHmmss')"""))
+    if RegExMatch(out, "^\d{14}$")
+        return out
+    return ""
+}
+
+QuoteForCmd(s) {
+    s := StrReplace(s, """", "\""")
+    return """" s """"
+}
+
+RunAndCapture(command) {
+    return RunCMD(command, A_ScriptDir)
+}
+
+ToLower(s) {
+    StringLower, out, s
+    return out
+}
+
+FindNightSharkSigner() {
+    candidates := [ A_ScriptDir "\nightshark-signer.exe"
+        , A_ScriptDir "/nightshark-signer.exe"
+        , A_WorkingDir "\nightshark-signer.exe"
+        , A_WorkingDir "/nightshark-signer.exe" ]
+
+    for _, p in candidates {
+        if FileExist(p)
+            return p
+    }
+
+    return A_ScriptDir "\nightshark-signer.exe"
+}
+
+CanPlaceOrderNow(asset) {
+    global enableLiveOrders, kalshiApiKeyId, kalshiPrivateKeyPath
+    if (!enableLiveOrders)
+        return true
+    if (kalshiApiKeyId != "" && kalshiPrivateKeyPath != "" && FileExist(kalshiPrivateKeyPath))
+        return true
+    return false
+}
+
+ShouldLogPrice(asset, minIntervalMs) {
+    global assetLastPriceLogTick
+    nowTick := A_TickCount
+    if !assetLastPriceLogTick.HasKey(asset) {
+        assetLastPriceLogTick[asset] := nowTick
+        return true
+    }
+    if ((nowTick - assetLastPriceLogTick[asset]) >= minIntervalMs) {
+        assetLastPriceLogTick[asset] := nowTick
+        return true
+    }
+    return false
+}
+
+MinutesRemainingInQuarter() {
+    utc := CurrentUtcNowAhk()
+    if (utc = "") {
+        ; Fallback to local clock if UTC unavailable
+        currentMinute := A_Min + 0
+        remaining := 15 - Mod(currentMinute, 15)
+        remaining := remaining - ((A_Sec + 0) / 60.0)
+        return remaining
+    }
+    mm := SubStr(utc, 11, 2) + 0
+    ss := SubStr(utc, 13, 2) + 0
+    remaining := 15 - Mod(mm, 15) - (ss / 60.0)
+    return remaining
+}
+
+IsXMinRemaining(x) {
+    return (MinutesRemainingInQuarter() <= x)
+}
+
+CurrentQuarterIndex() {
+    utc := CurrentUtcNowAhk()
+    if (utc = "") {
+        totalMinutes := (A_Hour + 0) * 60 + (A_Min + 0)
+        return Floor(totalMinutes / 15)
+    }
+    hh := SubStr(utc, 9, 2) + 0
+    mm := SubStr(utc, 11, 2) + 0
+    totalMinutes := hh * 60 + mm
+    return Floor(totalMinutes / 15)
+}
+
+SnapshotMinutesLeft(snapshot) {
+    if !IsObject(snapshot)
+        return ""
+
+    if (snapshot.HasKey("closeTime") && snapshot.closeTime != "") {
+        minsLeft := MinutesUntilIsoUtc(snapshot.closeTime)
+        if (minsLeft != "")
+            return minsLeft
+    }
+
+    if (snapshot.HasKey("minutesLeft"))
+        return snapshot.minutesLeft
+    return ""
+}
+
+IsSnapshotExpired(snapshot, cutoffMinutes := 0) {
+    minsLeft := SnapshotMinutesLeft(snapshot)
+    return (minsLeft != "" && minsLeft <= cutoffMinutes)
+}
+
+ClearKalshiMarketCache(asset) {
+    global assetSnapshotCache, assetMarketRefreshTick
+    if (assetSnapshotCache.HasKey(asset))
+        assetSnapshotCache.Delete(asset)
+    if (assetMarketRefreshTick.HasKey(asset))
+        assetMarketRefreshTick.Delete(asset)
+}
+
+GetKalshiMarketSnapshot(asset, maxRetries := 4) {
+    global assetSeriesMap, assetSnapshotCache, assetMarketRefreshTick, marketRefreshMs
+    if !assetSeriesMap.HasKey(asset)
+        return false
+    series := assetSeriesMap[asset]
+    nowTick := A_TickCount
+
+    if (assetSnapshotCache.HasKey(asset) && assetMarketRefreshTick.HasKey(asset)) {
+        cached := assetSnapshotCache[asset]
+        if (IsObject(cached) && (nowTick - assetMarketRefreshTick[asset]) < marketRefreshMs) {
+            if (IsSnapshotExpired(cached, 0.5)) {
+                ClearKalshiMarketCache(asset)
+            } else {
+                if (RefreshKalshiBestAsks(cached))
+                    return cached
+                return false
+            }
+        }
+    }
+
+    attempt := 1
+    while (attempt <= maxRetries) {
+        url := "https://api.elections.kalshi.com/trade-api/v2/markets?series_ticker=" series "&status=open&limit=1&_=" A_TickCount "-" attempt
+        body := HttpGet(url)
+
+        if (body != "") {
+            marketTicker := GetFirstNonEmptyJsonField(body, ["ticker"])
+            yesPrice := GetKalshiDollarPrice(body, "yes_ask_dollars", "yes_ask")
+            noPrice  := GetKalshiDollarPrice(body, "no_ask_dollars", "no_ask")
+
+            closeIso := GetFirstNonEmptyJsonField(body, ["close_time", "expected_expiration_time", "expiration_time", "settlement_time"])
+            minsLeft := MinutesUntilIsoUtc(closeIso)
+
+            ; Skip markets that already closed or close in < 30 seconds (stale/expired)
+            if (minsLeft != "" && minsLeft < 0.5) {
+                if (attempt < maxRetries) {
+                    Sleep 200
+                    attempt++
+                    continue
+                }
+            }
+
+            if (marketTicker != "") {
+                obj := {}
+                obj.up := (yesPrice != "") ? yesPrice + 0 : ""
+                obj.down := (noPrice != "") ? noPrice + 0 : ""
+                obj.minutesLeft := minsLeft
+                obj.closeTime := closeIso
+                obj.marketTicker := marketTicker
+                assetSnapshotCache[asset] := obj
+                assetMarketRefreshTick[asset] := nowTick
+                if (RefreshKalshiBestAsks(obj) || (obj.up != "" && obj.down != ""))
+                    return obj
+            }
+        }
+
+        if (attempt < maxRetries)
+            Sleep 200
+        attempt++
+    }
+
+    if (assetSnapshotCache.HasKey(asset)) {
+        cached := assetSnapshotCache[asset]
+        if IsObject(cached) {
+            if (IsSnapshotExpired(cached, 0.5)) {
+                ClearKalshiMarketCache(asset)
+                return false
+            }
+            if (RefreshKalshiBestAsks(cached))
+                return cached
+        }
+    }
+    return false
+}
+
+RefreshKalshiBestAsks(snapshot) {
+    if !IsObject(snapshot) || snapshot.marketTicker = ""
+        return false
+
+    url := "https://api.elections.kalshi.com/trade-api/v2/markets/" snapshot.marketTicker "/orderbook?depth=1&_=" A_TickCount
+    body := HttpGet(url)
+    if (body = "")
+        return false
+
+    yesBid := GetOrderbookBestBid(body, "yes_dollars")
+    noBid := GetOrderbookBestBid(body, "no_dollars")
+    updated := false
+
+    if (noBid != "") {
+        snapshot.up := Round(1 - (noBid + 0), 4)
+        updated := true
+    }
+    if (yesBid != "") {
+        snapshot.down := Round(1 - (yesBid + 0), 4)
+        updated := true
+    }
+
+    return updated
+}
+
+GetOrderbookBestBid(json, sideField) {
+    pattern := """" sideField """\s*:\s*\[\s*\[\s*""?(-?\d+(?:\.\d+)?)"
+    if RegExMatch(json, pattern, m)
+        return m1
+    return ""
+}
+
+GetKalshiDollarPrice(json, dollarField, centsField := "") {
+    val := GetFirstNonEmptyJsonField(json, [dollarField])
+    if (val != "")
+        return val
+
+    if (centsField != "") {
+        val := GetFirstNonEmptyJsonField(json, [centsField])
+        if (val != "" && IsNumericStr(val))
+            return (val + 0) / 100.0
+    }
+
+    return ""
+}
+
+GetFirstNonEmptyJsonField(json, fields, skipZero := false) {
+    for _, field in fields {
+        val := JsonField(json, field)
+        if (val != "") {
+            if (skipZero && IsNumericStr(val) && (val + 0) = 0)
+                continue
+            return val
+        }
+    }
+    return ""
+}
+
+IsNumericStr(s) {
+    s := Trim(s)
+    return RegExMatch(s, "^-?\d+(\.\d+)?$")
+}
+
+JsonField(json, field) {
+    pattern := """" field """\s*:\s*(""([^""]*)""|[^,}\s][^,}\r\n]*)"
+    result := ""
+    pos := 1
+    while (pos := RegExMatch(json, pattern, m, pos)) {
+        val := Trim(m1)
+        val := Trim(val, """")
+        if (val != "")
+            result := val
+        pos += StrLen(m)
+    }
+    return result
+}
+
+MinutesUntilIsoUtc(iso) {
+    ts := IsoUtcToAhk(iso)
+    if (ts = "")
+        return ""
+
+    nowUtc := CurrentUtcNowAhk()
+    if (nowUtc = "")
+        return ""
+
+    diff := ts
+    EnvSub, diff, %nowUtc%, Seconds
+    return diff / 60.0
+}
+
+IsoUtcToAhk(iso) {
+    if (iso = "")
+        return ""
+    if !RegExMatch(iso, "O)^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})", m)
+        return ""
+    return m1 m2 m3 m4 m5 m6
+}
+
 ```
-
----
-

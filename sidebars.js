@@ -29,7 +29,7 @@ const sidebars = {
         'youtube-code/video-7/video-7-mlma',
         'youtube-code/video-8/video-8-mlma',
         'youtube-code/video-9/video-9-kashi-v3',
-        'youtube-code/video-10/video-10-mlma',
+        'youtube-code/video-10/video-10-kashi-v4',
       ],
       collapsible: true,
       collapsed: false,
