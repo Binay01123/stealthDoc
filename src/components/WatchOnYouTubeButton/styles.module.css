@@ -1,0 +1,65 @@
+.youtubeButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.8em 1.3em;
+  border: none;
+  border-radius: 25px;
+  background: linear-gradient(to bottom, #ff0000 0%, #ff5050 100%);
+  box-shadow: 0 8px 18px rgba(255, 0, 0, 0.22), 0 5px 10px rgba(0, 0, 0, 0.22);
+  color: white;
+  font-family: inherit;
+  font-size: 18px;
+  font-weight: 800;
+  text-decoration: none;
+  transition: all 0.3s;
+}
+
+.youtubeButton:hover {
+  color: white;
+  text-decoration: none;
+  transform: translateY(-3px);
+  box-shadow: 0 8px 15px rgba(0, 0, 0, 0.3);
+}
+
+.youtubeButton:active {
+  transform: scale(0.95);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+.youtubeButton span {
+  display: block;
+  margin-left: 0.4em;
+  transition: all 0.3s;
+}
+
+.youtubeButton svg {
+  width: 18px;
+  height: 18px;
+  fill: white;
+  transition: all 0.3s;
+}
+
+.svgWrapperOuter {
+  display: flex;
+}
+
+.svgWrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin-right: 0.5em;
+  border-radius: 50%;
+  background-color: rgba(255, 255, 255, 0.2);
+  transition: all 0.3s;
+}
+
+.youtubeButton:hover .svgWrapper {
+  background-color: rgba(255, 255, 255, 0.5);
+}
+
+.youtubeButton:hover svg {
+  transform: rotate(45deg);
+}

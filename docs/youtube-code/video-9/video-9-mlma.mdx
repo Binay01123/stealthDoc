@@ -6,6 +6,8 @@ sidebar_position: 10
 slug: /youtube-code/video-9-kalshi-v3
 ---
 
+import KalshiV4Popup from '@site/src/components/KalshiV4Popup';
+
 <!--
   TEMPLATE FOR YOUTUBE VIDEO DOCUMENTATION
   
@@ -19,6 +21,8 @@ slug: /youtube-code/video-9-kalshi-v3
 -->
 
 # Video 9: Kalshi Trading Bot Version 3
+
+<KalshiV4Popup />
 
 This third iteration brings in an entirely new approach of routing orders through the Kalshi backend API rather than the front end. **The story behind Version 3 is that ongoing Kalshi updates kept breaking the HUD for Version 1 and Version 2.** To solve this, this strategy implements similar logic by bypassing the front end entirely and hooking directly into the Kalshi backend. This results in a much more lightweight and accurate setup.
 
