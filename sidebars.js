@@ -19,6 +19,13 @@ const sidebars = {
     {
       type: 'category',
       label: 'YouTube Series',
+      link: {
+        type: 'generated-index',
+        slug: '/youtube-code',
+        title: 'YouTube Code Series',
+        description:
+          'Browse the ProcessOverProfit YouTube code series, including automated trading scripts, Kalshi bots, Polymarket bots, and Nightshark walkthroughs.',
+      },
       items: [
         'youtube-code/video-1/video-1-mlma',
         'youtube-code/video-2/video-2-WicklessHeikenAshi',

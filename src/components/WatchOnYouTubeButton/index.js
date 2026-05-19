@@ -1,6 +1,16 @@
 import React from 'react';
 import styles from './styles.module.css';
 
+const YouTube = (props) => (
+  <svg {...props} preserveAspectRatio="xMidYMid" viewBox="0 0 256 180">
+    <path
+      fill="red"
+      d="M250.346 28.075A32.18 32.18 0 0 0 227.69 5.418C207.824 0 127.87 0 127.87 0S47.912.164 28.046 5.582A32.18 32.18 0 0 0 5.39 28.24c-6.009 35.298-8.34 89.084.165 122.97a32.18 32.18 0 0 0 22.656 22.657c19.866 5.418 99.822 5.418 99.822 5.418s79.955 0 99.82-5.418a32.18 32.18 0 0 0 22.657-22.657c6.338-35.348 8.291-89.1-.164-123.134Z"
+    />
+    <path fill="#FFF" d="m102.421 128.06 66.328-38.418-66.328-38.418z" />
+  </svg>
+);
+
 export default function WatchOnYouTubeButton({href}) {
   return (
     <a
@@ -10,17 +20,7 @@ export default function WatchOnYouTubeButton({href}) {
       target="_blank">
       <div className={styles.svgWrapperOuter}>
         <div className={styles.svgWrapper}>
-          <svg
-            height={24}
-            viewBox="0 0 24 24"
-            width={24}
-            xmlns="http://www.w3.org/2000/svg">
-            <path d="M0 0h24v24H0z" fill="none" />
-            <path
-              d="M1.946 9.315c-.522-.174-.527-.455.01-.634l19.087-6.362c.529-.176.832.12.684.638l-5.454 19.086c-.15.529-.455.547-.679.045L12 14l6-8-8 6-8.054-2.685z"
-              fill="currentColor"
-            />
-          </svg>
+          <YouTube aria-hidden="true" focusable="false" />
         </div>
       </div>
       <span>Watch on YouTube</span>

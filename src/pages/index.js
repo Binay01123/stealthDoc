@@ -54,7 +54,7 @@ function HomepageHeader() {
         <div className={styles.buttons}>
           <Link
             className="button button--secondary button--lg"
-            to="/docs/youtube-code/video-6-Kalshi-15-Min/">
+            to="/docs/youtube-code/">
             <Lottie 
               animationData={lottieCtaAnimation}
               loop={true}

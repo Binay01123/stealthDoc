@@ -1,5 +1,6 @@
 import React, {useCallback, useEffect, useState} from 'react';
 import WatchOnYouTubeButton from '@site/src/components/WatchOnYouTubeButton';
+import popupPoster from '@site/static/img/kalshi-v4-popup.png';
 import styles from './styles.module.css';
 
 const videoUrl = 'https://youtu.be/48NJfddRVeE';
@@ -12,12 +13,11 @@ export default function KalshiV4Popup() {
     const key = `kalshi-v4-popup:${window.location.pathname}`;
     setStorageKey(key);
 
-    if (window.sessionStorage.getItem(key) !== 'dismissed') {
-      setIsVisible(true);
-    }
+    const storedState = window.sessionStorage.getItem(key);
+    setIsVisible(storedState !== 'dismissed');
   }, []);
 
-  const closePopup = useCallback(() => {
+  const closeBanner = useCallback(() => {
     if (storageKey) {
       window.sessionStorage.setItem(storageKey, 'dismissed');
     }
@@ -29,34 +29,30 @@ export default function KalshiV4Popup() {
   }
 
   return (
-    <div className={styles.backdrop} role="presentation" onClick={closePopup}>
+    <div className={styles.bannerShell}>
       <section
         aria-labelledby="kalshi-v4-popup-title"
-        aria-modal="true"
-        className={styles.popup}
-        onClick={(event) => event.stopPropagation()}
-        role="dialog">
+        className={styles.banner}>
         <button
-          aria-label="Close popup"
+          aria-label="Close Kalshi Trading Bot v4.0 notice"
           className={styles.closeButton}
-          onClick={closePopup}
+          onClick={closeBanner}
           type="button">
           x
         </button>
         <img
           alt="Kalshi Trading Bot version 4.0"
           className={styles.poster}
-          src="/img/kalshi-v4-popup.png"
+          src={popupPoster}
         />
         <div className={styles.content}>
           <div className={styles.eyebrow}>New walkthrough available</div>
           <h2 className={styles.title} id="kalshi-v4-popup-title">
-            Kalshi Trading Bot v4.0 is live
+            Kalshi Trading Bot v4.0 is out now
           </h2>
           <p className={styles.description}>
             Version 4 adds multi-agent execution and delta-aware entries for
-            Kalshi 15 minute crypto markets. Watch the update before running
-            the older bot versions.
+            Kalshi 15 minute crypto markets.
           </p>
           <WatchOnYouTubeButton href={videoUrl} />
         </div>
