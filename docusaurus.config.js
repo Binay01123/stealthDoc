@@ -57,10 +57,55 @@ const config = {
           sidebarPath: './sidebars.js',
         },
         blog: false,
+        sitemap: {
+          lastmod: 'date',
+          ignorePatterns: ['/playground/**'],
+          createSitemapItems: async (params) => {
+            const items = await params.defaultCreateSitemapItems(params);
+            const videoPagePattern =
+              /^\/docs\/youtube-code\/video-(?:[1-9]|1[01])-[^/]+\/$/;
+
+            const prioritizedItems = items.map((item) => {
+              const pathname = new URL(item.url).pathname;
+
+              if (videoPagePattern.test(pathname)) {
+                return {...item, priority: 1};
+              }
+
+              if (pathname === '/docs/youtube-code/') {
+                return {...item, priority: 0.7};
+              }
+
+              return {...item, priority: 0.3};
+            });
+
+            return prioritizedItems.sort(
+              (left, right) => (right.priority ?? 0) - (left.priority ?? 0),
+            );
+          },
+        },
         theme: {
           customCss: './src/css/custom.css',
         },
       }),
+    ],
+  ],
+
+  plugins: [
+    [
+      '@docusaurus/plugin-client-redirects',
+      {
+        redirects: [
+          {
+            from: '/docs/intro',
+            to: '/docs/youtube-code',
+          },
+          {
+            from: '/docs/youtube-code/video-1',
+            to: '/docs/youtube-code/video-1-mlma',
+          },
+        ],
+      },
     ],
   ],
 
@@ -86,6 +131,11 @@ const config = {
             sidebarId: 'tutorialSidebar',
             position: 'left',
             label: 'YouTube Code',
+          },
+          {
+            type: 'custom-discord',
+            position: 'right',
+            href: 'https://discord.gg/PqGPq9en',
           },
         ],
       },

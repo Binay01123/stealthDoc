@@ -37,6 +37,7 @@ const sidebars = {
         'youtube-code/video-8/video-8-mlma',
         'youtube-code/video-9/video-9-kalshi-v3',
         'youtube-code/video-10/video-10-kalshi-v4',
+        'youtube-code/video-11/video-11-kalshi-arbitrage',
       ],
       collapsible: true,
       collapsed: false,

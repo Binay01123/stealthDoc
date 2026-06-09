@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import Head from '@docusaurus/Head';
 import Layout from '@theme/Layout';
 import styles from './playground.module.css';
 
@@ -99,6 +100,10 @@ export default function Playground() {
 
   return (
     <Layout title="Playground" description="Nightshark Playground">
+      <Head>
+        <meta name="robots" content="noindex, follow" />
+        <meta name="googlebot" content="noindex, follow" />
+      </Head>
       <div className={styles.playgroundPage}>
         <div className={styles.container}>
           <div className={styles.title}>Nightshark PlayGround</div>
@@ -158,4 +163,3 @@ export default function Playground() {
     </Layout>
   );
 }
-
