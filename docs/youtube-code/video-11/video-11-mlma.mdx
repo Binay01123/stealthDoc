@@ -1925,7 +1925,7 @@ IsoUtcToAhk(iso) {
 assets := ["BTC", "ETH"]     ; v5 correlation pair
 timeDelay := 15              ; activation window in minutes. 15 = monitor the whole 15m market.
 EntryRange := [0.8, 0.93]    ; [Min, Max] enter only when inverse pair sum is between 80c and 93c
-PairExit := 75               ; Stop Loss for pairs
+PairExit := 0.75               ; Stop Loss for pairs
 orderSize := 1
 shots := 3                   ; max pair entry shots per 15m market
 cooldownSec := 60            ; seconds to wait after one shot before seeking the next
