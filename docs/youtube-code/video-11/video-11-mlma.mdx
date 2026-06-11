@@ -1922,10 +1922,10 @@ IsoUtcToAhk(iso) {
 ; =========================
 ; LIVE TRADING Strategy Configuration
 ; =========================
-timeDelay := 15            ; activation window in minutes. 15 = monitor the whole 15m market.
-EntryRange := [0.8, 0.93]   ; [Min, Max] enter only when inverse pair sum is between 80c and 93c
-PairExit := 0.75             ; exit the locked pair when its current sum drops below 40c
-assets := ["BTC", "ETH"]     ; v5 correlation pair
+assets := ["BTC", "ETH"]     ; Arbitrage pair
+timeDelay := 15              ; activation window in minutes. 15 = monitor the whole 15m market.
+EntryRange := [0.8, 0.93]    ; [Min, Max] enter only when inverse pair sum is between 80c and 93c
+PairExit := 0.70             ; Stop Loss for pairs exits
 orderSize := 1
 shots := 2                   ; max pair entry shots per 15m market
 cooldownSec := 60            ; seconds to wait after one shot before seeking the next
@@ -4059,6 +4059,5 @@ IsoUtcToAhk(iso) {
         return ""
     return m1 m2 m3 m4 m5 m6
 }
-
 
 ```
