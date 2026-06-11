@@ -27,7 +27,7 @@ privatekey
 
 ```
 ; =========================
-; Strategy Configuration
+;  PAPER TRADING Strategy Configuration
 ; =========================
 assets := ["BTC", "ETH"]   ;correlation pair
 timeDelay := 15            ; activation window in minutes. 15 = monitor the whole 15m market.
@@ -1919,15 +1919,15 @@ IsoUtcToAhk(iso) {
 
 ## <span style={{color: '#00E676'}}>Live Trading Code</span>
 ```
-; ==========================================
+; =========================
 ; LIVE TRADING Strategy Configuration
-; ==========================================
+; =========================
+timeDelay := 15            ; activation window in minutes. 15 = monitor the whole 15m market.
+EntryRange := [0.8, 0.93]   ; [Min, Max] enter only when inverse pair sum is between 80c and 93c
+PairExit := 0.75             ; exit the locked pair when its current sum drops below 40c
 assets := ["BTC", "ETH"]     ; v5 correlation pair
-timeDelay := 15              ; activation window in minutes. 15 = monitor the whole 15m market.
-EntryRange := [0.8, 0.93]    ; [Min, Max] enter only when inverse pair sum is between 80c and 93c
-PairExit := 0.75               ; Stop Loss for pairs
 orderSize := 1
-shots := 3                   ; max pair entry shots per 15m market
+shots := 2                   ; max pair entry shots per 15m market
 cooldownSec := 60            ; seconds to wait after one shot before seeking the next
 noEntryMinutes := 1          ; last N minutes allow no new entry shots; open positions hold to resolution
 
@@ -1937,16 +1937,9 @@ noEntryMinutes := 1          ; last N minutes allow no new entry shots; open pos
 ; =============================================================
 enableLiveOrders := true
 pollIntervalMs := 700
-marketRefreshMs := 5000         ; refresh market/session metadata less often; orderbook still refreshes every loop         
-PairExitOrderPrice := 0.01   
-BehaviorLookbackMs := 10000  ; behavior velocity lookback window
-BehaviorSignEpsBps := 0.25   ; moves within this many bps are treated as baseline
-BehaviorEmaAlpha := 0.22     ; smoothing for the behavior score stream
-partialEntryRetryMax := 3    ; retry only the missing entry leg(s) after a partial fill
-partialEntryRetryDelayMs := 1750
-priceRefreshMs := 1500          ; throttle live asset price calls used only for LogStream
-restDelay := 2000            ; ms to let order rest before checking position
-entryOrderPrice := 1.00      ; pair BUY legs use max-aggressive individual orders
+marketRefreshMs := 5000         
+priceRefreshMs := 1500          
+restDelay := 2000          
 entryDiff := 0.00            ; legacy BUY offset; pair entry uses entryOrderPrice above.
 kalshiApiBase := "https://external-api.kalshi.com"
 assetSeriesMap := { "BTC": "KXBTC15M", "ETH": "KXETH15M", "SOL": "KXSOL15M", "XRP": "KXXRP15M", "DOGE": "KXDOGE15M", "HYPE": "KXHYPE15M", "BNB": "KXBNB15M" }
@@ -1958,6 +1951,13 @@ kalshiApiKeyResolvedPath := ""
 kalshiPrivateKeyResolvedPath := ""
 kalshiKeyPassphrase := "" 
 kalshiSignerPath := ""
+PairExitOrderPrice := 0.01  
+BehaviorLookbackMs := 10000  ; behavior velocity lookback window
+BehaviorSignEpsBps := 0.25  
+BehaviorEmaAlpha := 0.22 
+entryOrderPrice := 1.00      
+partialEntryRetryMax := 3
+partialEntryRetryDelayMs := 1750
 
 ; Track the locked pair after entry. Individual legs are also mirrored in positions.
 positions := {}
@@ -3726,7 +3726,11 @@ BuildClientOrderId(ticker, action, side) {
     if (nowUtc = "")
         nowUtc := A_Now
     Random, r, 100000, 999999
-    return ticker "-" action "-" side "-" nowUtc "-" A_TickCount "-" r
+    marketToken := RegExReplace(ticker, "^KX([A-Z0-9]+)15M.*$", "$1")
+    if (marketToken = ticker || marketToken = "")
+        marketToken := SubStr(RegExReplace(ticker, "[^A-Za-z0-9]", ""), 1, 12)
+    clientOrderId := marketToken "-" action "-" side "-" nowUtc "-" A_TickCount "-" r
+    return SubStr(clientOrderId, 1, 64)
 }
 
 CurrentTimeMillis() {
@@ -4055,5 +4059,6 @@ IsoUtcToAhk(iso) {
         return ""
     return m1 m2 m3 m4 m5 m6
 }
+
 
 ```
