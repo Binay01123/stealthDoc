@@ -135,7 +135,7 @@ const config = {
           {
             type: 'custom-discord',
             position: 'right',
-            href: 'https://discord.gg/PqGPq9en',
+            href: 'https://discord.gg/JKa2njzaQD',
           },
         ],
       },
