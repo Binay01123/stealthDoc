@@ -1,229 +1,1428 @@
 ---
-id: video-12-mlma
-title: Video-12 MLMA
-sidebar_label: Video-12 MLMA
+id: video-12-kalshi-backtesting
+title: "Video 12: Kalshi BackTesting"
+sidebar_label: "Video 12: Kalshi BackTesting"
 sidebar_position: 13
-slug: /youtube-code/video-12-mlma
-draft: true
+slug: /youtube-code/video-12-kalshi-backtesting
+description: Collect Kalshi session data in the background and visualize crypto price trends, arbitrage combinations, CF Benchmark spot prices, delta, and behavioral metrics in a dashboard.
+keywords: [Kalshi BackTesting, Kalshi backtesting dashboard, Kalshi data collection, Kalshi crypto dashboard, Kalshi arbitrage analysis, CF Benchmark spot prices, Kalshi delta metrics, Kalshi behavioral metrics]
 ---
 
-<!--
-  TEMPLATE FOR YOUTUBE VIDEO DOCUMENTATION
-  
-  To use this template:
-  1. Copy this file and rename it (e.g., video-1.mdx, scalping-strategy.mdx)
-  2. Replace all placeholder text with your actual content
-  3. Update the sidebar_position if needed
-  4. Replace VIDEO_ID_HERE with your YouTube video ID
-  5. Add your video thumbnail image to /static/img/ and update the path
-  6. Paste your indicator and Nightshark code in the respective code blocks
--->
+# Video 12: Kalshi BackTesting
 
-# Video-12 MLMA
+This video covers how to collect data from Kalshi and visualize each trading session in a dashboard. The workflow runs data collection in the background while giving traders a session review view for crypto price trends, arbitrage combinations, CF Benchmark spot prices, delta, and behavioral metrics.
 
-This walkthrough shows how to automate trades by pairing TradingView’s Machine Learning Moving Average script with NightShark and Tradovate. Copy the Pine Script into TradingView, attach it to a clean chart, and inspect replay signals. Load the NightShark script, map buy, sell, and neutral zones, then mirror orders to Tradovate while considering risk controls and expanded monitoring for ongoing insights.
-
-{/* ## YouTube Video
-
-<div style={{textAlign: 'center', margin: '2rem 0'}}>
-  <iframe
-    width="100%"
-    height="617"
-    src="https://www.youtube.com/embed/yKKjG_o63u4"
-    title="YouTube video player"
-    frameBorder="0"
-    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-    allowFullScreen
-    style={{maxWidth: '1097px', width: '100%', aspectRatio: '16/9', border: 'none'}}>
-  </iframe>
-</div>
-*/}
-
+The dashboard is designed to make every session easier to study after the fact. Instead of only watching live logs while a bot runs, traders can review what happened during the session, compare market behavior against the underlying crypto price action, and understand how each signal developed over time.
 
 ## Screen Map
 
-![Screen map showing TradingView, NightShark, and Tradovate](./2025-11-17-00-28-44.png)
+![Data collection thumbnai](./2026-06-17-22-37-21.png)
 
-## Indicator Code
+## What This Covers
+
+- Collecting Kalshi market data in the background while trading tools continue to run.
+- Visualizing crypto price trends for each recorded session.
+- Reviewing arbitrage combinations across tracked Kalshi markets.
+- Comparing Kalshi market behavior against CF Benchmark spot prices.
+- Tracking delta and behavioral metrics for session-level review.
+
+## Related Kalshi Videos
+
+This backtesting and session review workflow is especially important for the earlier Kalshi automation builds:
+
+- [Kalshi v3](/docs/youtube-code/video-9-kalshi-v3)
+- [Kalshi v4](/docs/youtube-code/video-10-kalshi-v4)
+- [Kalshi Arbitrage](/docs/youtube-code/video-11-kalshi-arbitrage-bot)
+
+## Data Recorder Code
 
 ```python
-//@version=6
-indicator("Machine Learning Moving Average [LuxAlgo]", "LuxAlgo - Machine Learning Moving Average", overlay=true)
-//---------------------------------------------------------------------------------------------------------------------
-// Settings
-//---------------------------------------------------------------------------------------------------------------------
-window   = input.int(100, minval=0)
-forecast = input.int(0)
-sigma    = input.float(0.01, step=0.1, minval=0)
+; =========================
+; Price Tracker Configuration
+; =========================
+assets := ["BTC", "ETH" , "SOL"]
+; Its optimal to track max 3 at a time although all 7 assets at once is possible.
 
-mult = input.float(2, 'Multiplicative Factor', minval=0)
-src  = input.source(close, 'Source')
+; 15-minute Kalshi crypto series only.
+priceTrackerAssetSeriesMap := { "BTC": "KXBTC15M", "ETH": "KXETH15M", "SOL": "KXSOL15M", "XRP": "KXXRP15M", "DOGE": "KXDOGE15M", "HYPE": "KXHYPE15M", "BNB": "KXBNB15M" }
+priceTrackerSnapshotCache := {}
+priceTrackerMarketRefreshTick := {}
+priceTrackerPriceCache := {}
+priceTrackerPriceRefreshTick := {}
+priceTrackerOutputDir := A_WorkingDir "\Training-Data"
+priceTrackerDashboardFile := priceTrackerOutputDir "\dashboard.html"
+priceTrackerOutputFile := ""
+priceTrackerDataIndexFile := priceTrackerOutputDir "\price-data-index.json"
+priceTrackerServerFile := priceTrackerOutputDir "\server.ps1"
+priceTrackerServerPort := 8788
+priceTrackerDashboardUrl := "http://127.0.0.1:" priceTrackerServerPort "/dashboard.html"
+priceTrackerOpenDashboardOnStart := true
+priceTrackerHasLoggedFirstWrite := false
+priceTrackerShardHours := 2
+priceTrackerCurrentShardKey := ""
+priceTrackerCurrentShardFile := ""
+pollIntervalMs := 1000
+marketRefreshMs := 5000
+priceRefreshMs := 1500
 
-// Style
-upCss   = input.color(color.new(#5b9cf6, 50), 'Upper Extremity', group='Style')
-dnCss   = input.color(color.new(#e91e63, 50), 'Lower Extremity', group='Style')
+Log("making training data space")
+if !PriceTrackerEnsureOutputFiles()
+    ExitApp
 
-bullCss = input.color(#3179f5, 'Moving Average', inline='ma', group='Style')
-bearCss = input.color(#e91e63, '', inline='ma', group='Style')
+if !PriceTrackerWriteRow(assets)
+    Log("could not start recording")
 
-//---------------------------------------------------------------------------------------------------------------------
-// Functions
-//---------------------------------------------------------------------------------------------------------------------
-rbf(x1, x2, l) => math.exp(-math.pow(x1 - x2, 2) / (2.0 * math.pow(l, 2)))
+Log("launching dashboard")
+priceTrackerDashboardReady := PriceTrackerStartDashboardServer()
 
-kernel_matrix(X1, X2, l) =>
-    km = matrix.new<float>(array.size(X1), array.size(X2))
+if (priceTrackerOpenDashboardOnStart && priceTrackerDashboardReady)
+    PriceTrackerOpenDashboard()
+else if (priceTrackerOpenDashboardOnStart)
+    Log("could not launch dashboard")
 
-    i = 0
-    for x1 in X1
-        j = 0
-        for x2 in X2
-            rbf_val = rbf(x1, x2, l)
-            matrix.set(km, i, j, rbf_val)
-            j += 1
-        i += 1
-    km
+Log("recording in progress.....")
 
-//---------------------------------------------------------------------------------------------------------------------
-// Kernel Setup
-//---------------------------------------------------------------------------------------------------------------------
-var identity = matrix.new<int>(window, window, 0)
-var K_row = array.new_float(0)
-
-if barstate.isfirst
-    var xtrain = array.new_int(0)
-    var xtest  = array.new_int(0)
-
-    // Build identity matrix and training array
-    for i = 0 to window - 1
-        for j = 0 to window - 1
-            matrix.set(identity, i, j, i == j ? 1 : 0)
-        array.push(xtrain, i)
-    
-    // Build testing array
-    for i = 0 to window + forecast - 1
-        array.push(xtest, i)
-    
-    // Compute kernel matrices
-    s      = matrix.mult(identity, sigma * sigma)
-    Ktrain = matrix.sum(kernel_matrix(xtrain, xtrain, window), s)
-    K_inv  = matrix.pinv(Ktrain)
-    K_star = kernel_matrix(xtrain, xtest, window)
-    // Multiply the transpose of K_star by K_inv and get the (window+forecast-1)th row as an array
-    K_row_temp = matrix.row(matrix.mult(matrix.transpose(K_star), K_inv), window + forecast - 1)
-    // Copy the computed row to K_row
-    for i = 0 to array.size(K_row_temp) - 1
-        array.push(K_row, array.get(K_row_temp, i))
-
-//---------------------------------------------------------------------------------------------------------------------
-// Moving Average Calculation
-//---------------------------------------------------------------------------------------------------------------------
-var os = 0
-
-mean = ta.sma(src, window)
-
-// Get end point estimate
-var float out = na
-
-if bar_index > window
-    dotprod = 0.0
-    // Dot product between last K_row and training data
-    for i = 0 to window - 1
-        dotprod += array.get(K_row, i) * (src[window - 1 - i] - mean)
-    // Output
-    out := dotprod + mean
-
-mae   = ta.sma(math.abs(src - out), window) * mult
-upper = out + mae
-lower = out - mae
-
-os := close > upper and out > out[1] ? 1 : close < lower and out < out[1] ? 0 : os
-
-//---------------------------------------------------------------------------------------------------------------------
-// Plotting
-//---------------------------------------------------------------------------------------------------------------------
-plot_out = plot(out, 'End Point GPR', color = os == 1 ? bullCss : bearCss)
-plot_change = plot(os != os[1] ? out : na, 'Circle', color = os == 1 ? bullCss : bearCss, linewidth = 3, style = plot.style_circles)
-plot_upper  = plot(upper, 'Upper', color = na)
-plot_lower  = plot(lower, 'Lower', color = na)
-
-fill(plot_upper, plot_out, out + mae, out, upCss, color.new(chart.bg_color, 100))
-fill(plot_out, plot_lower, out, out - mae, color.new(chart.bg_color, 100), dnCss)
-
-//---------------------------------------------------------------------------------------------------------------------
-// Table Setup
-//---------------------------------------------------------------------------------------------------------------------
-// Create a table with 2 columns and 1 row in the top-right corner
-var table signalTable = table.new(position.top_right, 2, 1, border_width = 1, frame_color = color.black)
-
-// Determine the signal text
-signalText = close > upper and out > out[1] ? "BUY" : close < lower and out < out[1] ? "SELL" : "NONE"
-
-// Set background color: green for BUY, red for SELL, white for NONE
-bgColor    = close > upper and out > out[1] ? color.green : close < lower and out < out[1] ? color.red : color.white
-
-// Set text color: white for BUY/SELL, black for NONE
-textColor  = close > upper and out > out[1] ? color.white : close < lower and out < out[1] ? color.white : color.black
-
-// Update table cells on every bar
-table.cell(signalTable, 0, 0, "SIGNAL", text_color = color.white, text_size = size.large, bgcolor = color.gray)
-table.cell(signalTable, 1, 0, signalText, text_color = textColor, text_size = size.large, bgcolor = bgColor)
-```
-
-## Nightshark Code
-
-```javascript
-;Machine learning Moving Average Code
-
-
-StopScript() {
-    Send, {F2}
-}
-
-BUY_condition() {
-    global
-    return (area[1] ~= "BUY")
-}
-
-SELL_condition() {
-    global
-    return (area[1] ~= "SELL")
-}
-
-longPosition:= 0
-shortPosition := 0
 loop {
-    loop{
-    read_areas()
-    } until (BUY_condition() || SELL_condition() )
+    Sleep %pollIntervalMs%
+    PriceTrackerWriteRow(assets)
+}
 
-    if(BUY_condition() && longPosition <> 1) {
-        if(shortPosition = 1) {
-            click(point.a)
-            shortPosition:= 0
-            click(point.c)
-        }
-        else {
-            click(point.a)
-            longPosition := 1
-            click(point.c)
+PriceTrackerEnsureOutputFiles() {
+    global priceTrackerOutputDir, priceTrackerDashboardFile, priceTrackerOutputFile, priceTrackerDataIndexFile, priceTrackerServerFile
+
+    outputDirAttributes := FileExist(priceTrackerOutputDir)
+    if (outputDirAttributes != "" && !InStr(outputDirAttributes, "D")) {
+        Log("could not make training data space")
+        return false
+    }
+
+    if (outputDirAttributes = "") {
+        FileCreateDir, %priceTrackerOutputDir%
+        if ErrorLevel {
+            Log("could not make training data space")
+            return false
         }
     }
 
-    else if(SELL_condition() && shortPosition <> 1 ) {
-        if(longPosition = 1) {
-            click(point.b)
-            longPosition := 0
-            click(point.c)
-        }
-        else {
-            click(point.b)
-            shortPosition := 1
-            click(point.c)
-        }
+    Log("preparing dashboard")
+    dashboardAttributes := FileExist(priceTrackerDashboardFile)
+    if (dashboardAttributes != "" && InStr(dashboardAttributes, "D")) {
+        Log("could not prepare dashboard")
+        return false
+    }
+
+    if !PriceTrackerWriteEmbeddedDashboard(priceTrackerDashboardFile) {
+        Log("could not prepare dashboard")
+        return false
+    }
+
+    Log("setting up data storage")
+    indexAttributes := FileExist(priceTrackerDataIndexFile)
+    if (indexAttributes != "" && InStr(indexAttributes, "D")) {
+        Log("could not set up data storage")
+        return false
+    }
+
+    if !PriceTrackerEnsureCurrentShard() {
+        return false
+    }
+
+    if !PriceTrackerWriteHttpListenerServerScript(priceTrackerServerFile) {
+        Log("could not prepare dashboard")
+        return false
+    }
+
+    return true
+}
+
+PriceTrackerAppendServerLine(serverFile, line) {
+    line .= "`r`n"
+    FileAppend, %line%, %serverFile%
+    return !ErrorLevel
+}
+
+PriceTrackerAppendServerLines(serverFile, lines) {
+    for _, line in lines {
+        if !PriceTrackerAppendServerLine(serverFile, line)
+            return false
+    }
+    return true
+}
+
+PriceTrackerWriteHttpListenerServerScript(serverFile) {
+    FileDelete, %serverFile%
+
+    serverLines := []
+    serverLines.Push("param(")
+    serverLines.Push("    [string]$Root = (Split-Path -Parent $MyInvocation.MyCommand.Path),")
+    serverLines.Push("    [int]$Port = 8765")
+    serverLines.Push(")")
+    serverLines.Push("")
+    serverLines.Push("$ErrorActionPreference = 'Stop'")
+    serverLines.Push("$Root = (Resolve-Path -LiteralPath $Root).Path")
+    serverLines.Push("$LogFile = Join-Path $Root 'server.log'")
+    serverLines.Push("$Prefix = ""http://127.0.0.1:$Port/""")
+    serverLines.Push("")
+    serverLines.Push("function Write-ServerLog {")
+    serverLines.Push("    param([string]$Message)")
+    serverLines.Push("    $line = ""[{0}] {1}"" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message")
+    serverLines.Push("    Add-Content -LiteralPath $LogFile -Value $line -Encoding UTF8")
+    serverLines.Push("}")
+    serverLines.Push("")
+    serverLines.Push("function Set-CommonHeaders {")
+    serverLines.Push("    param([System.Net.HttpListenerResponse]$Response)")
+    serverLines.Push("    try { $Response.Headers['Cache-Control'] = 'no-store' } catch { }")
+    serverLines.Push("    try { $Response.Headers['Access-Control-Allow-Origin'] = '*' } catch { }")
+    serverLines.Push("}")
+    serverLines.Push("")
+    serverLines.Push("function Send-TextResponse {")
+    serverLines.Push("    param(")
+    serverLines.Push("        [System.Net.HttpListenerContext]$Context,")
+    serverLines.Push("        [int]$StatusCode,")
+    serverLines.Push("        [string]$StatusText,")
+    serverLines.Push("        [string]$Body,")
+    serverLines.Push("        [string]$ContentType = 'text/plain; charset=utf-8'")
+    serverLines.Push("    )")
+    serverLines.Push("    $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)")
+    serverLines.Push("    $response = $Context.Response")
+    serverLines.Push("    $response.StatusCode = $StatusCode")
+    serverLines.Push("    $response.StatusDescription = $StatusText")
+    serverLines.Push("    $response.ContentType = $ContentType")
+    serverLines.Push("    $response.ContentLength64 = $bytes.Length")
+    serverLines.Push("    Set-CommonHeaders $response")
+    serverLines.Push("    if ($Context.Request.HttpMethod -ne 'HEAD') {")
+    serverLines.Push("        $response.OutputStream.Write($bytes, 0, $bytes.Length)")
+    serverLines.Push("    }")
+    serverLines.Push("}")
+    serverLines.Push("")
+    serverLines.Push("$mimeTypes = @{")
+    serverLines.Push("    '.html' = 'text/html; charset=utf-8'")
+    serverLines.Push("    '.htm' = 'text/html; charset=utf-8'")
+    serverLines.Push("    '.js' = 'application/javascript; charset=utf-8'")
+    serverLines.Push("    '.css' = 'text/css; charset=utf-8'")
+    serverLines.Push("    '.json' = 'application/json; charset=utf-8'")
+    serverLines.Push("    '.jsonl' = 'application/x-ndjson; charset=utf-8'")
+    serverLines.Push("    '.txt' = 'text/plain; charset=utf-8'")
+    serverLines.Push("}")
+    serverLines.Push("")
+    serverLines.Push("$listener = [System.Net.HttpListener]::new()")
+    serverLines.Push("$listener.Prefixes.Add($Prefix)")
+    serverLines.Push("try {")
+    serverLines.Push("    $listener.Start()")
+    serverLines.Push("} catch {")
+    serverLines.Push("    Write-ServerLog ('Server not started. ' + $_.Exception.Message)")
+    serverLines.Push("    Start-Sleep -Seconds 20")
+    serverLines.Push("    exit 1")
+    serverLines.Push("}")
+    serverLines.Push("")
+    serverLines.Push("Write-ServerLog ""Serving $Root at ${Prefix}dashboard.html""")
+    serverLines.Push("")
+    serverLines.Push("while ($listener.IsListening) {")
+    serverLines.Push("    $context = $listener.GetContext()")
+    serverLines.Push("    try {")
+    serverLines.Push("        $method = $context.Request.HttpMethod")
+    serverLines.Push("        if ($method -ne 'GET' -and $method -ne 'HEAD') {")
+    serverLines.Push("            Send-TextResponse $context 405 'Method Not Allowed' 'Method not allowed.'")
+    serverLines.Push("            continue")
+    serverLines.Push("        }")
+    serverLines.Push("")
+    serverLines.Push("        $requestPath = [System.Uri]::UnescapeDataString($context.Request.Url.AbsolutePath)")
+    serverLines.Push("        if ([string]::IsNullOrWhiteSpace($requestPath) -or $requestPath -eq '/') {")
+    serverLines.Push("            $requestPath = '/dashboard.html'")
+    serverLines.Push("        }")
+    serverLines.Push("")
+    serverLines.Push("        $relativePath = $requestPath.TrimStart('/').Replace('/', [System.IO.Path]::DirectorySeparatorChar)")
+    serverLines.Push("        if ($relativePath -match '(^|[\\/])\.\.([\\/]|$)') {")
+    serverLines.Push("            Send-TextResponse $context 403 'Forbidden' 'Forbidden.'")
+    serverLines.Push("            continue")
+    serverLines.Push("        }")
+    serverLines.Push("")
+    serverLines.Push("        $rootFull = [System.IO.Path]::GetFullPath($Root)")
+    serverLines.Push("        $separator = [string][System.IO.Path]::DirectorySeparatorChar")
+    serverLines.Push("        $rootPrefix = $rootFull")
+    serverLines.Push("        if (!$rootPrefix.EndsWith($separator)) {")
+    serverLines.Push("            $rootPrefix += $separator")
+    serverLines.Push("        }")
+    serverLines.Push("        $filePath = [System.IO.Path]::GetFullPath((Join-Path $rootFull $relativePath))")
+    serverLines.Push("        if (!$filePath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {")
+    serverLines.Push("            Send-TextResponse $context 403 'Forbidden' 'Forbidden.'")
+    serverLines.Push("            continue")
+    serverLines.Push("        }")
+    serverLines.Push("")
+    serverLines.Push("        if (!(Test-Path -LiteralPath $filePath -PathType Leaf)) {")
+    serverLines.Push("            Send-TextResponse $context 404 'Not Found' 'Not found.'")
+    serverLines.Push("            continue")
+    serverLines.Push("        }")
+    serverLines.Push("")
+    serverLines.Push("        $fileInfo = Get-Item -LiteralPath $filePath")
+    serverLines.Push("        $fileLength = [int64]$fileInfo.Length")
+    serverLines.Push("        $rangeHeader = $context.Request.Headers['Range']")
+    serverLines.Push("        $start = [int64]0")
+    serverLines.Push("        $end = [int64]($fileLength - 1)")
+    serverLines.Push("        if ($fileLength -eq 0) {")
+    serverLines.Push("            $end = [int64]-1")
+    serverLines.Push("        }")
+    serverLines.Push("        $statusCode = 200")
+    serverLines.Push("        $statusText = 'OK'")
+    serverLines.Push("        if ($rangeHeader -match '^bytes=(\d+)-(\d*)$') {")
+    serverLines.Push("            $start = [int64]$matches[1]")
+    serverLines.Push("            if ($matches[2] -ne '') {")
+    serverLines.Push("                $end = [int64]$matches[2]")
+    serverLines.Push("            }")
+    serverLines.Push("            if ($fileLength -eq 0 -or $start -ge $fileLength) {")
+    serverLines.Push("                $response = $context.Response")
+    serverLines.Push("                $response.StatusCode = 416")
+    serverLines.Push("                $response.StatusDescription = 'Range Not Satisfiable'")
+    serverLines.Push("                $response.ContentLength64 = 0")
+    serverLines.Push("                $response.Headers['Accept-Ranges'] = 'bytes'")
+    serverLines.Push("                $response.Headers['Content-Range'] = ""bytes */$fileLength""")
+    serverLines.Push("                Set-CommonHeaders $response")
+    serverLines.Push("                continue")
+    serverLines.Push("            }")
+    serverLines.Push("            if ($end -ge $fileLength) {")
+    serverLines.Push("                $end = $fileLength - 1")
+    serverLines.Push("            }")
+    serverLines.Push("            if ($end -lt $start) {")
+    serverLines.Push("                $end = $start")
+    serverLines.Push("            }")
+    serverLines.Push("            $statusCode = 206")
+    serverLines.Push("            $statusText = 'Partial Content'")
+    serverLines.Push("        }")
+    serverLines.Push("        $contentLength = [int64]0")
+    serverLines.Push("        if ($fileLength -gt 0) {")
+    serverLines.Push("            $contentLength = [int64]($end - $start + 1)")
+    serverLines.Push("        }")
+    serverLines.Push("        $ext = [System.IO.Path]::GetExtension($filePath).ToLowerInvariant()")
+    serverLines.Push("        $contentType = $mimeTypes[$ext]")
+    serverLines.Push("        if ([string]::IsNullOrWhiteSpace($contentType)) {")
+    serverLines.Push("            $contentType = 'application/octet-stream'")
+    serverLines.Push("        }")
+    serverLines.Push("")
+    serverLines.Push("        $response = $context.Response")
+    serverLines.Push("        $response.StatusCode = $statusCode")
+    serverLines.Push("        $response.StatusDescription = $statusText")
+    serverLines.Push("        $response.ContentType = $contentType")
+    serverLines.Push("        $response.ContentLength64 = $contentLength")
+    serverLines.Push("        $response.Headers['Accept-Ranges'] = 'bytes'")
+    serverLines.Push("        if ($statusCode -eq 206) {")
+    serverLines.Push("            $response.Headers['Content-Range'] = ""bytes $start-$end/$fileLength""")
+    serverLines.Push("        }")
+    serverLines.Push("        Set-CommonHeaders $response")
+    serverLines.Push("        if ($method -ne 'HEAD' -and $contentLength -gt 0) {")
+    serverLines.Push("            $fileStream = [System.IO.File]::OpenRead($filePath)")
+    serverLines.Push("            try {")
+    serverLines.Push("                $fileStream.Seek($start, [System.IO.SeekOrigin]::Begin) | Out-Null")
+    serverLines.Push("                $bufferSize = [int][Math]::Min(65536, $contentLength)")
+    serverLines.Push("                $buffer = New-Object byte[] $bufferSize")
+    serverLines.Push("                $remaining = [int64]$contentLength")
+    serverLines.Push("                while ($remaining -gt 0) {")
+    serverLines.Push("                    $readSize = [int][Math]::Min($buffer.Length, $remaining)")
+    serverLines.Push("                    $read = $fileStream.Read($buffer, 0, $readSize)")
+    serverLines.Push("                    if ($read -le 0) {")
+    serverLines.Push("                        break")
+    serverLines.Push("                    }")
+    serverLines.Push("                    $response.OutputStream.Write($buffer, 0, $read)")
+    serverLines.Push("                    $remaining -= $read")
+    serverLines.Push("                }")
+    serverLines.Push("            } finally {")
+    serverLines.Push("                $fileStream.Close()")
+    serverLines.Push("            }")
+    serverLines.Push("        }")
+    serverLines.Push("    } catch {")
+    serverLines.Push("        Write-ServerLog ('Request failed. ' + $_.Exception.Message)")
+    serverLines.Push("        try {")
+    serverLines.Push("            Send-TextResponse $context 500 'Internal Server Error' 'Internal server error.'")
+    serverLines.Push("        } catch {")
+    serverLines.Push("        }")
+    serverLines.Push("    } finally {")
+    serverLines.Push("        try {")
+    serverLines.Push("            $context.Response.OutputStream.Close()")
+    serverLines.Push("        } catch {")
+    serverLines.Push("        }")
+    serverLines.Push("    }")
+    serverLines.Push("}")
+
+    if !PriceTrackerAppendServerLines(serverFile, serverLines) {
+        FileDelete, %serverFile%
+        return false
+    }
+    return true
+}
+
+PriceTrackerWriteServerScript(serverFile) {
+    FileDelete, %serverFile%
+    if !PriceTrackerAppendServerLine(serverFile, "param(") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    [string]$Root = (Split-Path -Parent $MyInvocation.MyCommand.Path),") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    [int]$Port = 8765") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, ")") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "$ErrorActionPreference = 'Stop'") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "$Root = (Resolve-Path -LiteralPath $Root).Path") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "$LogFile = Join-Path $Root 'server.log'") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "function Write-ServerLog {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    param([string]$Message)") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    $line = ""[{0}] {1}"" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    Add-Content -LiteralPath $LogFile -Value $line -Encoding UTF8") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "}") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "function Write-HttpResponse {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    param(") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        [System.Net.Sockets.NetworkStream]$Stream,") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        [int]$StatusCode,") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        [string]$StatusText,") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        [string]$Body,") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        [string]$ContentType = 'text/plain; charset=utf-8'") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    )") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($Body)") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    $headers = ""HTTP/1.1 $StatusCode $StatusText``r``nContent-Type: $ContentType``r``nContent-Length: $($bodyBytes.Length)``r``nCache-Control: no-store``r``nAccess-Control-Allow-Origin: *``r``nConnection: close``r``n``r``n""") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($headers)") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    $Stream.Write($headerBytes, 0, $headerBytes.Length)") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    $Stream.Write($bodyBytes, 0, $bodyBytes.Length)") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "}") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "$mimeTypes = @{") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    '.html' = 'text/html; charset=utf-8'") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    '.htm' = 'text/html; charset=utf-8'") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    '.js' = 'application/javascript; charset=utf-8'") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    '.css' = 'text/css; charset=utf-8'") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    '.json' = 'application/json; charset=utf-8'") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    '.jsonl' = 'application/x-ndjson; charset=utf-8'") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    '.txt' = 'text/plain; charset=utf-8'") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "}") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse('127.0.0.1'), $Port)") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "try {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    $listener.Start()") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "} catch {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    Write-ServerLog ""Server not started. Port $Port is probably already in use. $($_.Exception.Message)""") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    exit 0") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "}") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "Write-ServerLog ""Serving $Root at http://127.0.0.1:${Port}/dashboard.html""") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "while ($true) {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    $client = $listener.AcceptTcpClient()") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    try {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        $stream = $client.GetStream()") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::ASCII, $false, 1024, $true)") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        $requestLine = $reader.ReadLine()") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        if ([string]::IsNullOrWhiteSpace($requestLine)) {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "            continue") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        }") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        while ($true) {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "            $line = $reader.ReadLine()") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "            if ($null -eq $line -or $line -eq '') {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "                break") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "            }") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        }") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        if ($requestLine -notmatch '^(GET|HEAD) ([^ ]+) HTTP/') {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "            Write-HttpResponse $stream 405 'Method Not Allowed' 'Method not allowed.'") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "            continue") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        }") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        $method = $matches[1]") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        $requestPath = [System.Uri]::UnescapeDataString(($matches[2] -split '\?')[0])") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        if ($requestPath -eq '/') {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "            $requestPath = '/dashboard.html'") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        }") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        $relativePath = $requestPath.TrimStart('/').Replace('/', [System.IO.Path]::DirectorySeparatorChar)") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        if ($relativePath -match '(^|[\\/])\.\.([\\/]|$)') {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "            Write-HttpResponse $stream 403 'Forbidden' 'Forbidden.'") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "            continue") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        }") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        $rootFull = [System.IO.Path]::GetFullPath($Root)") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        $filePath = [System.IO.Path]::GetFullPath((Join-Path $rootFull $relativePath))") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        if (!$filePath.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "            Write-HttpResponse $stream 403 'Forbidden' 'Forbidden.'") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "            continue") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        }") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        if (!(Test-Path -LiteralPath $filePath -PathType Leaf)) {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "            Write-HttpResponse $stream 404 'Not Found' 'Not found.'") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "            continue") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        }") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        $bytes = [System.IO.File]::ReadAllBytes($filePath)") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        $ext = [System.IO.Path]::GetExtension($filePath).ToLowerInvariant()") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        $contentType = $mimeTypes[$ext]") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        if ([string]::IsNullOrWhiteSpace($contentType)) {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "            $contentType = 'application/octet-stream'") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        }") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        $headers = ""HTTP/1.1 200 OK``r``nContent-Type: $contentType``r``nContent-Length: $($bytes.Length)``r``nCache-Control: no-store``r``nAccess-Control-Allow-Origin: *``r``nConnection: close``r``n``r``n""") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($headers)") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        $stream.Write($headerBytes, 0, $headerBytes.Length)") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        if ($method -ne 'HEAD') {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "            $stream.Write($bytes, 0, $bytes.Length)") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        }") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    } catch {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        try {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "            Write-ServerLog ""Request failed. $($_.Exception.Message)""") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        } catch {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        }") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    } finally {") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "        $client.Close()") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "    }") {
+        FileDelete, %serverFile%
+        return false
+    }
+    if !PriceTrackerAppendServerLine(serverFile, "}") {
+        FileDelete, %serverFile%
+        return false
+    }
+    return true
+}
+PriceTrackerStartDashboardServer() {
+    global priceTrackerOutputDir, priceTrackerServerFile, priceTrackerServerPort, priceTrackerDashboardUrl
+
+    PriceTrackerStopExistingDashboardServer()
+    command := "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command Start-Process -WindowStyle Hidden -FilePath powershell.exe -ArgumentList " . PriceTrackerPowerShellArgumentList("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", priceTrackerServerFile, "-Root", priceTrackerOutputDir, "-Port", priceTrackerServerPort)
+    PriceTrackerLogServerEvent("Launch requested via RunCMD.")
+    launchOutput := PriceTrackerRunCMD(command, priceTrackerOutputDir)
+    if (Trim(launchOutput) != "") {
+        PriceTrackerLogServerEvent("RunCMD output: " . Trim(launchOutput))
+    }
+
+    if PriceTrackerWaitForDashboardServer(8000) {
+        PriceTrackerLogServerEvent("Server ready via RunCMD launch.")
+        return true
+    }
+
+    PriceTrackerLogServerEvent("RunCMD launch did not respond; trying native AHK Run fallback.")
+    runCommand := "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File " . PriceTrackerQuoteForCmd(priceTrackerServerFile) . " -Root " . PriceTrackerQuoteForCmd(priceTrackerOutputDir) . " -Port " . priceTrackerServerPort
+    Run, %runCommand%, %priceTrackerOutputDir%, Hide UseErrorLevel
+    if ErrorLevel {
+        PriceTrackerLogServerEvent("Native AHK server launch failed.")
+    }
+
+    if PriceTrackerWaitForDashboardServer(8000) {
+        PriceTrackerLogServerEvent("Server ready after native AHK fallback.")
+        return true
+    }
+
+    PriceTrackerLogServerEvent("Server did not become reachable at " . priceTrackerDashboardUrl)
+    return false
+}
+
+PriceTrackerStopExistingDashboardServer() {
+    global priceTrackerOutputDir, priceTrackerServerPort
+
+    stopScript := "$port=" priceTrackerServerPort "; $cmd=Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue; if ($cmd) { $connections=@(Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $port -State Listen -ErrorAction SilentlyContinue); foreach ($c in $connections) { $proc=Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue; if ($proc -and ($proc.ProcessName -like 'powershell*' -or $proc.ProcessName -eq 'pwsh')) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } } }"
+    stopCommand := "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command " . PriceTrackerQuoteForCmd(stopScript)
+    RunWait, %stopCommand%, %priceTrackerOutputDir%, Hide UseErrorLevel
+    if ErrorLevel
+        PriceTrackerLogServerEvent("Existing dashboard server cleanup returned ErrorLevel " . ErrorLevel)
+    Sleep 500
+}
+
+PriceTrackerOpenDashboard() {
+    global priceTrackerOutputDir, priceTrackerDashboardUrl
+
+    Sleep 700
+    Run, %priceTrackerDashboardUrl%, %priceTrackerOutputDir%, UseErrorLevel
+    if ErrorLevel {
+        openCommand := "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command Start-Process " . PriceTrackerQuoteForPowerShell(priceTrackerDashboardUrl)
+        PriceTrackerRunCMD(openCommand, priceTrackerOutputDir)
     }
 }
+
+PriceTrackerWaitForDashboardServer(timeoutMs := 8000) {
+    startTick := A_TickCount
+    while ((A_TickCount - startTick) < timeoutMs) {
+        if PriceTrackerDashboardServerResponds()
+            return true
+        Sleep 250
+    }
+    return false
+}
+
+PriceTrackerDashboardServerResponds() {
+    global priceTrackerDashboardUrl
+
+    try {
+        http := ComObjCreate("WinHttp.WinHttpRequest.5.1")
+        http.SetTimeouts(400, 400, 400, 400)
+        http.Open("GET", priceTrackerDashboardUrl, false)
+        http.Send()
+        return (http.Status >= 200 && http.Status < 500)
+    } catch e {
+        return false
+    }
+}
+
+PriceTrackerLogServerEvent(message) {
+    global priceTrackerOutputDir
+
+    FormatTime, logTime, %A_Now%, yyyy-MM-dd HH:mm:ss
+    line := "[" logTime "] tracker: " message "`r`n"
+    logFile := priceTrackerOutputDir "\server.log"
+    FileAppend, %line%, %logFile%
+}
+
+PriceTrackerRunCMD(command, workingDir := "") {
+    if IsFunc("RunCMD") {
+        runCmdFn := Func("RunCMD")
+        return runCmdFn.Call(command, workingDir)
+    }
+
+    shell := ComObjCreate("WScript.Shell")
+    if (workingDir != "")
+        shell.CurrentDirectory := workingDir
+    exec := shell.Exec("cmd.exe /S /C """ command """")
+    output := ""
+    while !exec.StdOut.AtEndOfStream
+        output .= exec.StdOut.ReadLine() "`n"
+    while !exec.StdErr.AtEndOfStream
+        output .= exec.StdErr.ReadLine() "`n"
+    return output
+}
+
+PriceTrackerQuoteForCmd(s) {
+    s := StrReplace(s, """", "\""")
+    return """" s """"
+}
+
+PriceTrackerQuoteForPowerShell(s) {
+    s := StrReplace(s, "'", "''")
+    return "'" s "'"
+}
+
+PriceTrackerPowerShellArgumentList(args*) {
+    list := ""
+    for _, arg in args {
+        if (list != "")
+            list .= ","
+        list .= PriceTrackerQuoteForPowerShell(arg)
+    }
+    return list
+}
+
+PriceTrackerWriteEmbeddedDashboard(dashboardFile) {
+    FileDelete, %dashboardFile%
+
+    FileAppend, % "<!doctype html><html lang=""en""><meta charset=""utf-8""><meta name=""viewport"" content=""width=device-width,initial-scale=1""><title>Crypto Price History</title><style>:root{color-scheme:dark;--bg:#000000;--panel:#050805;--panel-2:#090d08;--border:#2b3528;--grid:rgba(240, 255, 235, 0.13);--axis:rgba(236, 236, 228, 0.72);--text:#efefe8;--muted:#b9beb1;--muted-2:#858d7b;--green:#00e060;--green-soft:rgba(0, 224, 96, 0.18);--red:#ff003d;--red-soft:rgba(255, 0, 61, 0.2);--amber:#ffcc00;--btc:#ff8a00;--eth:#008cff;--sync:#00ff66;--delay:#ffcc00;--unstable:#ff6a00;--divergence:#ff003d;--blue:#008cff;--shadow:rgba(0, 0, 0, 0.34)}*{box-sizing:border-box}body,html{min-height:100%}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,""Segoe UI"",sans-serif;letter-spacing:0}button,select{font:inherit}.shell{width:min(1520px,calc(100vw - 32px));margin:0 auto;padding:20px 0 28px}.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px}h1{margin:0;font-size:clamp(21px, 2vw, 30px);font-weight:760;letter-spacing:0}.controls{display:flex;align-items:center;gap:8px;min-width:min(100%,620px)}.icon-button,select{border:1px solid var(--border);background:var(--panel-2);color:var(--text);height:38px}select{flex:0 0 auto;border-radius:7px;padding:0 12px;outline:0}#marketSelect{flex:1 1 360px;width:min(520px,100%)}.icon-button{width:40px;border-radius:7px;display:inline-grid;place-items:center;cursor:pointer;font-size:20px;line-height:1}.icon-button:hover,.market-button:hover,select:hover{border-color:rgba(239,239,232,.52)}.chart-chip:focus-visible,.grid-toggle input:focus-visible,.icon-button:focus-visible,.market-button:focus-visible,.side-toggle:focus-visible,select:focus-visible{outline:2px solid var(--blue);outline-offset:2px}.grid-toggle{height:38px;display:inline-flex;align-items:center;gap:8px;padding:0 11px;border:1px solid var(--border);border-radius:7px;background:var(--panel-2);color:var(--text);cursor:pointer;font-size:13px;flex:0 0 auto;white-space:nowrap}.grid-toggle:hover{border-color:rgba(239,239,232,.52)}.grid-toggle input{width:15px;height:15px;accent-color:var(--green);cursor:pointer}.workspace{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:14px;align-items:stretch;transition:grid-template-columns 160ms ease}.workspace.side-collapsed{grid-template-columns:minmax(0,1fr) 46px}.chart-panel,.metric,.side-panel{border:1px solid var(--border);background:var(--panel);border-radius:8px;box-shadow:0 12px 28px var(--shadow)}.chart-panel{--section-color:var(--green);position:relative;min-width:0;padding:14px}.chart-panel::after,.market-button::after,.metric::after,.side-panel::after,.summary-item::after{content:"""";position:absolute;top:9px;right:9px;width:11px;height:11px;border:2px solid #efefe8;border-radius:999px;background:var(--section-color,var(--green));box-shadow:0 0 0 2px rgba(0,0,0,.82),0 0 14px color-mix(in srgb,var(--section-color,var(--green)) 76%,transparent);pointer-events:none}.chart-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:12px}.market-title{min-width:0}.market-title strong{display:block;font-size:17px;font-weight:760;line-height:1.25}.market-title span{display:block;margin-top:4px;color:var(--muted);font-size:12px;overflow-wrap:anywhere}.symbol-selector{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:8px 10px;min-width:min(100%,420px)}.symbol-option{display:inline-flex;align-items:center;gap:7px;border:1px solid rgba(239,239,232,.2);border-radius:7px;background:rgba(9,13,8,.82);color:var(--muted);min-height:34px;padding:0 10px;cursor:pointer;font-size:13px;font-weight:750;user-select:none}.symbol-option.checked{border-color:var(--green);color:var(--text);box-shadow:0 0 16px rgba(0,224,96,.12)}.symbol-option.disabled{opacity:.48;cursor:not-allowed}.symbol-option input{width:16px;height:16px;accent-color:var(--green);cursor:inherit}.symbol-option input:focus-visible{outline:2px solid var(--blue);outline-offset:2px}.chart-controls{display:grid;grid-template-columns:minmax(0,1fr) minmax(220px,0.42fr);gap:10px;margin:0 0 12px}.chart-dropzone{min-height:44px;display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:8px;border:1px dashed rgba(236,236,228,.22);border-radius:8px;background:rgba(9,13,8,.84)}.chart-dropzone::before{content:attr(data-label);flex:0 0 auto;color:var(--muted-2);font-size:11px;font-weight:760;letter-spacing:.04em;text-transform:uppercase}.chart-dropzone.drag-over{border-color:var(--amber);background:rgba(217,179,109,.09)}.chart-chip{display:inline-flex;align-items:center;gap:7px;min-height:28px;padding:0 10px;border:1px solid rgba(236,236,228,.22);border-radius:7px;background:#080d07;color:var(--text);cursor:grab;font-size:12px;font-weight:700;user-select:none}.chart-chip::before{content:"""";width:9px;height:9px;border-radius:999px;background:var(--chip-color,var(--muted));box-shadow:0 0 0 3px rgba(255,255,255,.04)}.chart-chip:active{cursor:grabbing}.chart-chip.dragging{opacity:.48}.chart-chip.merge-target{border-color:var(--amber);box-shadow:0 0 0 2px rgba(217,179,109,.16)}.chart-wrap{position:relative;height:min(90vh,1040px);min-height:760px;border:1px solid rgba(236,236,228,.16);border-radius:8px;background:#000;overflow:hidden}.pane-handles{position:absolute;inset:0;z-index:4;pointer-events:none}.pane-handle{position:absolute;display:inline-flex;align-items:center;justify-content:center;gap:0;height:28px;width:28px;min-width:28px;padding:0;border:1px solid rgba(236,236,228,.22);border-radius:7px;background:rgba(5,8,5,.9);color:var(--text);cursor:grab;font-size:0;font-weight:760;line-height:1;overflow:hidden;user-select:none;pointer-events:auto;backdrop-filter:blur(6px)}.pane-handle::before{content:"""";flex:0 0 auto;width:9px;height:9px;border-radius:999px;background:var(--chip-color,var(--muted));box-shadow:0 0 0 3px rgba(255,255,255,.04)}.pane-handle:active{cur", %dashboardFile%
+    if ErrorLevel {
+        FileDelete, %dashboardFile%
+        return false
+    }
+
+    FileAppend, % "sor:grabbing}.pane-handle.dragging{opacity:.5}.pane-handle.merge-target{border-color:var(--amber);box-shadow:0 0 0 2px rgba(217,179,109,.16)}canvas{display:block;width:100%;height:100%}.tooltip{position:absolute;z-index:5;min-width:252px;max-width:320px;padding:10px 11px;border:1px solid rgba(239,239,232,.25);border-radius:7px;background:rgba(18,20,16,.94);box-shadow:0 16px 32px rgba(0,0,0,.42);pointer-events:none;opacity:0;transform:translate3d(0,0,0);transition:opacity 90ms ease}.tooltip.visible{opacity:1}.tooltip-time{margin-bottom:8px;font-size:12px;color:var(--muted)}.tip-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:baseline;font-size:12px;line-height:1.45}.tip-row span{color:var(--muted);overflow-wrap:anywhere}.tip-row strong{font-size:13px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;min-width:0}.tip-row.green strong{color:var(--green)}.tip-row.red strong{color:var(--red)}.tip-row.btc strong{color:var(--btc)}.tip-row.eth strong{color:var(--eth)}.tip-row.warning strong{color:var(--amber)}.tip-row.sync strong{color:var(--sync)}.tip-row.delay strong{color:var(--delay)}.tip-row.unstable strong{color:var(--unstable)}.tip-row.divergence strong{color:var(--divergence)}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:12px}.metric{--section-color:var(--amber);position:relative;padding:10px 11px}.metric-label{color:var(--muted);font-size:11px;text-transform:uppercase}.metric-value{margin-top:6px;font-size:15px;font-weight:720;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.side-panel{--section-color:var(--eth);position:relative;min-height:0;display:grid;grid-template-rows:auto auto minmax(0,1fr);overflow:hidden;transition:min-width 160ms ease,opacity 160ms ease}.side-summary{padding:13px;border-bottom:1px solid var(--border)}.side-summary-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;padding-right:38px}.side-toggle{position:absolute;top:10px;right:28px;z-index:2;width:28px;height:28px;display:inline-grid;place-items:center;border:1px solid rgba(236,236,228,.24);border-radius:7px;background:#080d07;color:var(--text);cursor:pointer;font-size:16px;font-weight:800;line-height:1}.side-toggle:hover{border-color:var(--eth);box-shadow:0 0 14px rgba(0,140,255,.32)}.side-summary h2{margin:0;font-size:15px;font-weight:760}.summary-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.summary-item{--section-color:var(--green);position:relative;padding:9px;padding-right:26px;border:1px solid rgba(239,239,232,.1);border-radius:7px;background:rgba(255,255,255,.025)}.summary-item:nth-child(2){--section-color:var(--eth)}.summary-item:nth-child(3){--section-color:var(--amber)}.summary-item:nth-child(4){--section-color:var(--btc)}.summary-item:nth-child(5){--section-color:var(--red)}.summary-label{color:var(--muted);font-size:11px;text-transform:uppercase}.summary-value{margin-top:5px;font-weight:720;font-variant-numeric:tabular-nums}.method{padding:11px 13px;color:var(--muted);font-size:12px;line-height:1.45;border-bottom:1px solid var(--border)}.market-list{min-height:0;overflow:auto;padding:8px}.market-button{--section-color:var(--green);position:relative;width:100%;min-height:58px;margin:0 0 6px;border:1px solid transparent;border-radius:7px;background:0 0;color:var(--text);cursor:pointer;text-align:left;padding:8px 28px 8px 9px}.market-button.active{border-color:var(--section-color);background:color-mix(in srgb,var(--section-color) 18%,transparent)}.market-button.incomplete{color:var(--amber)}.market-button .button-main{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px;font-weight:700}.market-button .button-sub{margin-top:5px;color:var(--muted);font-size:11px;overflow-wrap:anywhere}.pill{flex:0 0 auto;color:var(--muted);border:1px solid rgba(239,239,232,.18);border-radius:999px;padding:2px 7px;font-size:11px;font-weight:650}.market-button.incomplete .pill{color:var(--amber);border-color:rgba(217,179,109,.45)}.side-panel.collapsed{grid-template-rows:1fr;min-width:46px}.side-panel.collapsed .market-list,.side-panel.collapsed .method,.side-panel.collapsed .side-summary{display:none;opacity:0;visibility:hidden;pointer-events:none}.side-panel.collapsed::before{content:""History"";position:absolute;left:50%;top:54px;transform:translateX(-50%);color:var(--muted);font-size:12px;font-weight:780;letter-spacing:.08em;text-transform:uppercase;writing-mode:vertical-rl}.side-panel.collapsed .side-toggle{right:8px}.empty{display:grid;place-items:center;min-height:300px;color:var(--muted);text-align:center;padding:24px}@media (max-width:1120px){.chart-header,.topbar{align-items:stretch;flex-direction:column}.controls{min-width:0;width:100%;padding-right:98px}.workspace{grid-template-columns:1fr}.side-panel{max-height:560px}}@media (max-width:720px){.shell{width:min(100vw - 18px,1520px);padding-top:12px}.controls{display:grid;grid-template-columns:40px minmax(0,1fr) 40px;padding-right:0}.grid-toggle{grid-column:1/-1;justify-content:center}select{min-width:0}.chart-panel{padding:10px}.chart-controls{grid-template-columns:1fr}.chart-wrap{height:1040px;min-height:1040px}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}</style><main class=""shell""><div class=""topbar""><div><h1>Crypto Price History</h1></div><div class=""controls"" aria-label=""History session controls""><button class=""icon-button"" id=""previousMarket"" type=""button"" aria-label=""Previous session"" title=""Previous session"">&larr;</button> <select id=""marketSelect"" aria-label=""History session""></select> <button class=""icon-button"" id=""nextMarket"" type=""button"" aria-label=""Next session"" title=""Next session"">&rarr;</button> <label class=""grid-toggle""><input type=""checkbox"" id=""fixedGridToggle""> <span>Fixed grid</span></label></div></div><section class=""workspace"" id=""workspace""><div class=""chart-panel""><div class=""chart-header""><div class=""market-title""><strong id=""marketHeading"">No histo", %dashboardFile%
+    if ErrorLevel {
+        FileDelete, %dashboardFile%
+        return false
+    }
+
+    FileAppend, % "ry session selected</strong> <span id=""marketNames""></span></div><div class=""symbol-selector"" id=""symbolSelector"" aria-label=""Symbols""></div></div><div class=""chart-controls"" aria-label=""Chart visibility""><div class=""chart-dropzone"" id=""activeCharts"" data-zone=""active"" data-label=""Active""></div><div class=""chart-dropzone"" id=""hiddenCharts"" data-zone=""hidden"" data-label=""Hidden""></div></div><div class=""chart-wrap"" id=""chartWrap""><canvas id=""pairChart"" aria-label=""Crypto price history charts""></canvas><div class=""pane-handles"" id=""paneHandles"" aria-label=""Draggable chart panels""></div><div class=""tooltip"" id=""tooltip""></div></div><div class=""metrics"" aria-label=""Selected history session metrics""><div class=""metric""><div class=""metric-label"">Window</div><div class=""metric-value"" id=""metricWindow"">-</div></div><div class=""metric""><div class=""metric-label"">Data Points</div><div class=""metric-value"" id=""metricSamples"">-</div></div><div class=""metric""><div class=""metric-label"">Combined Range</div><div class=""metric-value"" id=""metricRange"">-</div></div><div class=""metric""><div class=""metric-label"">Data Sync</div><div class=""metric-value"" id=""metricAlignment"">-</div></div></div></div><aside class=""side-panel"" id=""sidePanel"" aria-label=""Price history sessions""><button class=""side-toggle"" id=""sidePanelToggle"" type=""button"" aria-label=""Collapse history panel"" aria-expanded=""true"" title=""Collapse history panel"">></button><div class=""side-summary""><div class=""side-summary-head""><h2>Price History</h2></div><div class=""summary-grid""><div class=""summary-item""><div class=""summary-label"">Sessions</div><div class=""summary-value"" id=""summaryMarkets"">-</div></div><div class=""summary-item""><div class=""summary-label"">Full Sessions</div><div class=""summary-value"" id=""summaryComplete"">-</div></div><div class=""summary-item""><div class=""summary-label"">Data Points</div><div class=""summary-value"" id=""summarySamples"">-</div></div><div class=""summary-item""><div class=""summary-label"">Source Skew</div><div class=""summary-value"" id=""summarySkew"">-</div></div><div class=""summary-item""><div class=""summary-label"">Events</div><div class=""summary-value"" id=""summaryTrades"">-</div></div></div></div><div class=""method"" id=""alignmentMethod""></div><div class=""market-list"" id=""marketList""></div></aside></section></main><script>(()=>{let e=null,t=null,n=""legacy"",r=null,i=new Set,s=new Map,a=new Map;const o=document.getElementById(""pairChart"");let l=o.getContext(""2d"");const d=l,c=document.createElement(""canvas""),u=c.getContext(""2d""),h=document.getElementById(""workspace""),m=document.getElementById(""sidePanel""),f=document.getElementById(""sidePanelToggle""),g=document.getElementById(""chartWrap""),p=document.getElementById(""tooltip""),b=document.getElementById(""symbolSelector""),y=document.getElementById(""marketSelect""),x=document.getElementById(""marketList""),v=document.getElementById(""previousMarket""),S=document.getElementById(""nextMarket""),k=document.getElementById(""fixedGridToggle""),M=document.getElementById(""activeCharts""),w=document.getElementById(""hiddenCharts""),N=document.getElementById(""paneHandles""),C=""#000000"",L=""rgba(240, 255, 235, 0.13)"",E=""rgba(236, 236, 228, 0.72)"",I=""#efefe8"",T=""#b9beb1"",O=""#00e060"",$=""#ff003d"",B=""#ff8a00"",P=""#008cff"",A=""#00ff66"",D=""#ffcc00"",R=""#ff6a00"",F=""#ff003d"",K=""#f2ead3"",W=""#008cff"",U=""#ffcc00"",H=""#efefe8"",G=""rgba(239, 239, 232, 0.45)"",Y=""rgba(239, 239, 232, 0.58)"",_=0,j=1,V=2,J=3,z=4,q=5,X=6,Z=7,Q=8,ee=10,te=11,ne=12,re=13,ie=14,se=15,ae=""./price-data.jsonl"",oe=""./price-data-index.json"",le=[""JAN"",""FEB"",""MAR"",""APR"",""MAY"",""JUN"",""JUL"",""AUG"",""SEP"",""OCT"",""NOV"",""DEC""],de={JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11};function ce(e){const t=String(e||"""").match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);if(!t)return null;const n=new Date(Number(t[1]),Number(t[2])-1,Number(t[3]),Number(t[4]),Number(t[5]),Number(t[6]));return Number.isNaN(n.getTime())?null:n}function ue(e,t){const n=String(e||"""").match(/^(\d{2})([A-Z]{3})(\d{2})(\d{2})(\d{2})-\d{2}$/);let r;return n&&Object.prototype.hasOwnProperty.call(de,n[2])?r=new Date(2e3+Number(n[1]),de[n[2]],Number(n[3]),Number(n[4]),Number(n[5]),0):(r=new Date(t),r.setSeconds(0,0),r.setMinutes(15*Math.floor(r.getMinutes()/15)+15)),{start:new Date(r.getTime()-9e5),close:r}}function he(e){const t=e=>String(e).padStart(2,""0"");return[e.getFullYear(),""-"",t(e.getMonth()+1),""-"",t(e.getDate()),"" "",t(e.getHours()),"":"",t(e.getMinutes()),"":"",t(e.getSeconds())].join("""")}function me(e){if(null==e||""""===e)return null;const t=Number(e);return Number.isFinite(t)?t:null}function fe(e,t){return null!==e&&null!==t?e-t:null}function ge(e,t){return null!==e&&null!==t&&e>0&&t>0?Math.log(e/t):null}function pe(e,t,n,r){const i=me(n.upPrice),s=me(n.downPrice),a=me(r.upPrice),o=me(r.downPrice);if([i,s,a,o].some(e=>null===e))return null;const l=Math.round((e.getTime()-t.getTime())/1e3);if(l<0||l>900)return null;const d=me(n.underlyingCurrent),c=me(r.underlyingCurrent),u=me(n.underlyingOpen),h=me(r.underlyingOpen),m=ge(d,u),f=ge(c,h);return[l,i+o,a+s,i,s,a,o,d,c,0,u,h,fe(d,u),fe(c,h),m,f,null!==m&&null!==f?m-f:null,null,null,null,null,0,0]}function be(e,t,n){const r=me(n.upPrice),i=me(n.downPrice);if([r,i].some(e=>null===e))return null;const s=Math.round((e.getTime()-t.getTime())/1e3);if(s<0||s>900)return null;const a=me(n.underlyingCurrent),o=me(n.underlyingOpen),l=ge(a,o);return[s,null,null,r,i,null,null,a,null,0,o,null,fe(a,o),null,l,null,null,null,null,null,null,0,0]}function ye(e){const t=String(e&&e.assetName?e.assetName:"""").toUpperCase(),n=String(e&&e.marketName?e.marketName:""""),r=function(e){const t=String(e||""""),n=t.indexOf(""-"");return n>=0?t.slice(n+1):""""}(n);return t&&r?{symbol:t,marketName:n,marketKey:r,upPrice:e.upPrice,downPrice:e.downPrice,underlyingOpen:e.underlyingOpen,underlyingCurrent:e.underlyingCurrent}:null}function xe(e){const t=[""BTC"",""ETH"",""SOL"",""DOGE"",""XRP"",""HYPE"",""BNB""],n=t.indexOf(e);return n>=0?n:t.length+e.charCodeAt(0)}function v", %dashboardFile%
+    if ErrorLevel {
+        FileDelete, %dashboardFile%
+        return false
+    }
+
+    FileAppend, % "e(e){return(new TextEncoder).encode(String(e||"""")).length}function Se(e){const t=String(e||"""").match(/\/(\d+)$/);return t?Number(t[1]):null}function ke(){return{rows:[],availableSymbols:[],availableSymbolSet:new Set,skippedRows:0,byteLength:0,pendingLine:"""",tail:"""",signature:""0:"",revision:0,pairCaches:new Map,pairCacheOrder:[],rangeSupported:!0}}function Me(e,t){var n;e.availableSymbolSet.has(t)||(e.availableSymbolSet.add(t),e.availableSymbols=(n=e.availableSymbolSet,[...n].sort((e,t)=>xe(e)-xe(t)||e.localeCompare(t))))}function we(e){e.signature=``${e.byteLength}:${e.tail}``}function Ne(e,t,n={}){n.reset&&(e.rows=[],e.availableSymbols=[],e.availableSymbolSet=new Set,e.skippedRows=0,e.pendingLine="""",e.tail="""",e.pairCaches=new Map,e.pairCacheOrder=[],e.revision+=1);const r=String(t||"""");if(!r)return Number.isFinite(n.byteLength)&&(e.byteLength=n.byteLength,we(e)),!1;const i=e.pendingLine+r,s=/\r?\n$/.test(i),a=i.split(/\r?\n/);e.pendingLine=s?"""":a.pop(),s&&""""===a[a.length-1]&&a.pop();let o=!1;for(const t of a){const n=t.trim();if(!n)continue;let r;try{r=JSON.parse(n)}catch(t){e.skippedRows+=1;continue}const i=ce(r.timestamp);if(!i){e.skippedRows+=1;continue}const s=new Map;for(const t of Array.isArray(r.assets)?r.assets:[]){const n=ye(t);n&&(s.set(n.symbol,n),Me(e,n.symbol))}s.size?(e.rows.push({timestamp:i,assets:s}),o=!0):e.skippedRows+=1}return o&&(e.revision+=1),e.byteLength=Number.isFinite(n.byteLength)?n.byteLength:e.byteLength+ve(r),e.tail=(e.tail+r).slice(-512),we(e),o}function Ce(e){const t=ke();return Ne(t,e,{reset:!0,byteLength:ve(e)}),t}function Le(e){if(!e||!e.file||!e.start)return null;const t=ce(e.start),n=ce(e.end);return t?{file:String(e.file),start:t,end:n,startLabel:he(t),endLabel:n?he(n):"""",bytes:Number(e.bytes||0),active:Boolean(e.active)}:null}async function Ee(){const e=await fetch(oe,{cache:""no-store""});if(404===e.status)return null;if(!e.ok)throw new Error(``HTTP ${e.status} while loading ${oe}``);const t=await e.json(),n=(Array.isArray(t.shards)?t.shards:[]).map(Le).filter(Boolean).sort((e,t)=>e.start-t.start);if(!n.length)throw new Error(``${oe} has no valid shard entries``);return{version:t.version||1,updatedAt:t.updatedAt||"""",shardHours:t.shardHours||2,shards:n}}function Ie(){return r?r.shards.map((e,t)=>i.has(e.file)?t:-1).filter(e=>e>=0):[]}function Te(e){if(!r||!Array.isArray(r.shards))return[];const t=e.getTime();return Number.isFinite(t)?r.shards.map((e,n)=>{const i=e.start.getTime(),s=function(e){if(e&&e.end)return e.end;const t=r&&Number(r.shardHours)?Number(r.shardHours):2;return new Date(e.start.getTime()+36e5*t)}(e).getTime();return t>i&&t<=s?n:-1}).filter(e=>e>=0):[]}function Oe(e,t,n=null){const r=function(e){const t=e=>String(e).padStart(2,""0""),n=t(e.getFullYear()%100),r=le[e.getMonth()]||""JAN"",i=t(e.getDate()),s=t(e.getHours()),a=t(e.getMinutes());return``${n}${r}${i}${s}${a}-${a}``}(t);let i=e.get(r);return i||(i={marketKey:r,close:t,closeLabel:he(t),shardIndexes:[]},e.set(r,i)),Number.isInteger(n)&&n>=0&&!i.shardIndexes.includes(n)&&i.shardIndexes.push(n),i}function $e(){const e=new Map,n=t&&Array.isArray(t.markets)?t.markets:[];for(let t=0;t<n.length;t+=1){const r=n[t],i=new Date(r.marketClose);if(Number.isFinite(i.getTime())){const n=Oe(e,i);n.actualIndex=t,n.closeLabel=r.marketCloseLabel||n.closeLabel;for(const e of Te(i))n.shardIndexes.includes(e)||n.shardIndexes.push(e)}}return[...e.values()].sort((e,t)=>e.close-t.close)}function Be(){const t=ke();let n=0;for(const e of function(){if(!r)return Array.from(i);const e=r.shards.map(e=>e.file).filter(e=>i.has(e));for(const t of i)e.includes(t)||e.push(t);return e}()){const r=a.get(e)||"""";Ne(t,r);const i=s.get(e);n+=Number.isFinite(i)&&i>=0?i:ve(r)}return t.byteLength=n,we(t),e=t,e}async function Pe(t,n={}){if(e||(e=ke()),!t||!t.file)return!1;const r=s.get(t.file)||0,o=n.append&&i.has(t.file)&&r>0,l=o?{Range:``bytes=${r}-``}:{},d=await fetch((c=t.file,``./${encodeURIComponent(String(c||"""")).replaceAll(""%2F"",""/"")}``),{cache:""no-store"",headers:l});var c;if(o&&416===d.status){const e=Se(d.headers.get(""Content-Range""));return Number.isFinite(e)&&s.set(t.file,e),!1}if(o&&206===d.status){const n=await d.text(),o=Se(d.headers.get(""Content-Range"")),l=a.get(t.file)||"""";a.set(t.file,l+n);const c=Ne(e,n);return s.set(t.file,Number.isFinite(o)?o:r+ve(n)),i.add(t.file),c}if(!d.ok)throw new Error(``HTTP ${d.status} while loading ${t.file}``);const u=i.has(t.file),h=e.signature,m=await d.text(),f=Number(d.headers.get(""Content-Length"")),g=Number.isFinite(f)&&f>=0?f:ve(m),p=a.get(t.file);return s.set(t.file,g),a.set(t.file,m),i.add(t.file),(!u||p!==m)&&(Be(),e.signature!==h)}function Ae(e,t,n){const r=function(e,t){return``${e}|${t||""""}``}(t,n);let i=e.pairCaches.get(r);return i||(i=function(e,t){return{primarySymbol:e,secondarySymbol:t||"""",lastRowIndex:0,marketsByKey:new Map,primaryMarkets:new Set,secondaryMarkets:new Set,pairSkippedRows:0,marketOrder:[],marketOrderDirty:!1,dataRevision:0}}(t,n),e.pairCaches.set(r,i)),function(e,t){for(e.pairCacheOrder=(e.pairCacheOrder||[]).filter(e=>e!==t),e.pairCacheOrder.push(t);e.pairCacheOrder.length>6;){const n=e.pairCacheOrder.shift();n!==t&&e.pairCaches.delete(n)}}(e,r),i}function De(e,t,n,r,i){let s=e.marketsByKey.get(t);if(s)return!s.primaryMarketName&&r.marketName&&(s.primaryMarketName=r.marketName),!s.secondaryMarketName&&i&&i.marketName&&(s.secondaryMarketName=i.marketName),s;const a=ue(t,n.timestamp);return s={marketKey:t,primaryMarketName:r.marketName,secondaryMarketName:i?i.marketName:"""",marketStart:a.start,marketClose:a.close,samplesByOffset:new Map,primaryRawRows:0,secondaryRawRows:0,dirty:!0,output:null},e.marketsByKey.set(t,s),e.marketOrder.push(s),e.marketOrderDirty=!0,s}function Re(t,n){if(!t||!Array.isArray(n)||n.length<1||n.length>qe)return function(t=[]){return{generatedAt:he(new Date),sources:{jsonl:[ae]},alignment:{grouping:""Crypto price snapshots are grouped into 15-minute history sessions."",method:2===t.length?``No shared history sessions were found for ${t.join(""/", %dashboardFile%
+    if ErrorLevel {
+        FileDelete, %dashboardFile%
+        return false
+    }
+
+    FileAppend, % """)}.``:1===t.length?``No history sessions were found for ${t[0]}.``:""Select at least one symbol to build a price history chart."",maxSkewSeconds:0,xWindowSeconds:900},sampleColumns:[],stats:{btcMarkets:0,ethMarkets:0,sharedMarkets:0,completeMarkets:0,totalAlignedSamples:0,totalSkippedForSkew:e?e.skippedRows:0,totalTradeEvents:0,totalDrawTradeEvents:0,omittedPartialMarkets:0},selectedSymbols:t,markets:[]}}(n||[]);const[r,i=""""]=n,s=2===n.length,a=Ae(t,r,i);!function(e,t){const n=e.rows||[],r=!t.secondarySymbol;for(let e=t.lastRowIndex;e<n.length;e+=1){const i=n[e],s=i.assets.get(t.primarySymbol),a=r?null:i.assets.get(t.secondarySymbol);if(!s||!r&&!a)continue;if(s.marketName&&t.primaryMarkets.add(s.marketName),a&&a.marketName&&t.secondaryMarkets.add(a.marketName),!s.marketKey||!r&&s.marketKey!==a.marketKey){t.pairSkippedRows+=1;continue}const o=De(t,s.marketKey,i,s,a);o.primaryRawRows+=1,a&&(o.secondaryRawRows+=1);const l=r?be(i.timestamp,o.marketStart,s):pe(i.timestamp,o.marketStart,s,a);l?(o.samplesByOffset.set(l[_],l),o.dirty=!0):t.pairSkippedRows+=1}t.lastRowIndex=n.length,t.dataRevision=e.revision,t.marketOrderDirty&&(t.marketOrder.sort((e,t)=>e.marketStart-t.marketStart),t.marketOrderDirty=!1)}(t,a);const o=a.marketOrder.map(e=>function(e,t,n,r){if(e.dirty||!e.output){const i=[...e.samplesByOffset.values()].sort((e,t)=>e[_]-t[_]);if(!i.length)return e.output=null,e.dirty=!1,null;const s=i[0][_],a=i[i.length-1][_];e.output={marketKey:e.marketKey,selectedSymbols:t,primarySymbol:n,secondarySymbol:r||"""",primaryMarketName:e.primaryMarketName,secondaryMarketName:e.secondaryMarketName||"""",btcMarketName:e.primaryMarketName,ethMarketName:e.secondaryMarketName||"""",marketStart:e.marketStart.toISOString(),marketClose:e.marketClose.toISOString(),marketStartLabel:he(e.marketStart),marketCloseLabel:he(e.marketClose),complete:s<=30&&a>=870,btcRawRows:e.primaryRawRows,ethRawRows:e.secondaryRawRows,sampleCount:i.length,candidateSamples:i.length,skippedForSkew:0,maxAlignmentSkewSec:0,firstSampleOffsetSec:s,lastSampleOffsetSec:a,events:[],samples:i},e.dirty=!1}else e.output&&(e.output.selectedSymbols=t);return e.output}(e,n,r,i)).filter(Boolean),l=o.reduce((e,t)=>e+t.sampleCount,0);return{generatedAt:he(new Date),sources:{jsonl:[ae]},alignment:{grouping:""Crypto price snapshots are grouped into 15-minute history sessions."",method:s?``Each JSONL line is one synchronized crypto price snapshot. Current charts are calculated from ${r}/${i}.``:``Each JSONL line is one crypto price snapshot. Current charts are calculated from ${r}.``,maxSkewSeconds:0,xWindowSeconds:900},sampleColumns:s?[""offsetSec"",``${r}_UP_${i}_DOWN``,``${i}_UP_${r}_DOWN``,``${r.toLowerCase()}UpPrice``,``${r.toLowerCase()}DownPrice``,``${i.toLowerCase()}UpPrice``,``${i.toLowerCase()}DownPrice``,``${r.toLowerCase()}UnderlyingCurrent``,``${i.toLowerCase()}UnderlyingCurrent``,""sourceSkewSec"",``${r.toLowerCase()}UnderlyingOpen``,``${i.toLowerCase()}UnderlyingOpen``,``${r.toLowerCase()}UnderlyingDelta``,``${i.toLowerCase()}UnderlyingDelta``,``${r.toLowerCase()}LogMove``,``${i.toLowerCase()}LogMove``,``${r.toLowerCase()}${i.toLowerCase()}LogDivergence``,""divergenceVelocity"",""divergenceAcceleration"",""divergenceExpansion"",""divergenceZScore"",""divergenceAlert"",""pairExitWarning""]:[""offsetSec"","""","""",``${r.toLowerCase()}UpPrice``,``${r.toLowerCase()}DownPrice``,"""","""",``${r.toLowerCase()}UnderlyingCurrent``,"""",""sourceSkewSec"",``${r.toLowerCase()}UnderlyingOpen``,"""",``${r.toLowerCase()}UnderlyingDelta``,"""",``${r.toLowerCase()}LogMove``,"""","""","""","""","""","""",""divergenceAlert"",""pairExitWarning""],stats:{btcMarkets:a.primaryMarkets.size,ethMarkets:a.secondaryMarkets.size,sharedMarkets:o.length,completeMarkets:o.filter(e=>e.complete).length,totalAlignedSamples:l,totalSkippedForSkew:(t.skippedRows||0)+a.pairSkippedRows,totalTradeEvents:0,totalDrawTradeEvents:0,omittedPartialMarkets:0},selectedSymbols:n,markets:o}}async function Fe(t={}){const n=t.append&&e&&e.byteLength>0&&!1!==e.rangeSupported,r=n?{Range:``bytes=${e.byteLength}-``}:{},i=await fetch(ae,{cache:""no-store"",headers:r});if(n&&206===i.status){const t=await i.text(),n=Se(i.headers.get(""Content-Range""));return Ne(e,t,{byteLength:Number.isFinite(n)?n:e.byteLength+ve(t)}),e.rangeSupported=!0,e}if(n&&416===i.status){const t=Se(i.headers.get(""Content-Range""));return Number.isFinite(t)&&t<e.byteLength?Fe({append:!1}):(Number.isFinite(t)&&(e.byteLength=t,we(e)),e)}if(!i.ok)throw new Error(``HTTP ${i.status} while loading ${ae}``);const s=Ce(await i.text()),a=Number(i.headers.get(""Content-Length""));return Number.isFinite(a)&&a>=0&&(s.byteLength=a,we(s)),s.rangeSupported=!n,s}function Ke(){return!t||!t.markets.length||je.selectedIndex>=t.markets.length-1}async function We(t={}){const n=e?e.signature:"""",s=Ke(),a=Bt(),o=a?a.marketKey:je.savedMarketKey,l=await Ee();l&&(r=l);const d=r&&r.shards.length?r.shards[r.shards.length-1]:null;if(!d)return!1;await Pe(d,{append:i.has(d.file)});const c=void 0!==t.preferredMarketKey?t.preferredMarketKey:s?null:o;return jn(e,{...t,previousSignature:n,preferredMarketKey:c})}async function Ue(t){if(""sharded""!==n||!r||!r.shards.length)return!1;try{const e=await Ee();e&&(r=e)}catch(e){console.error(e)}const i=Ie();if(!i.length)return!1;const s=t<0?Math.min(...i)-1:Math.max(...i)+1;if(s<0||s>=r.shards.length)return!1;const a=e?e.signature:"""",o=Bt()?Bt().marketKey:null;return await Pe(r.shards[s]),jn(e,{previousSignature:a,force:!0,preferredMarketKey:o}),!0}function He(e){if(""sharded""!==n||!r||!r.shards.length)return!1;const t=Ie();if(!t.length)return!1;const i=e<0?Math.min(...t)-1:Math.max(...t)+1;return i>=0&&i<r.shards.length}const Ge={pair:{id:""pair"",paneName:""pair"",label:""Selected Pair Combined Odds"",shortLabel:""Pair"",color:O,weight:1.45,kind:""pair""},btcLog:{id:""btcLog"",paneName:""btc"",label:""Primary Delta"",shortLabel:""Primary"",color:B,axisLabel:""delta"",weight:1,kind:""log""},ethLog:{id:""ethLog"",paneName:""eth"",label:""Secondary Delta"",shortLabel:""Secondary"",color:P,axisLabel:""delta"",weight:1,kind:""log""},underlying:{id:""underlying"",paneName:""", %dashboardFile%
+    if ErrorLevel {
+        FileDelete, %dashboardFile%
+        return false
+    }
+
+    FileAppend, % "underlying"",label:""Selected Pair Spot Prices"",shortLabel:""PRICE"",color:B,weight:1.18,kind:""underlying""},btcOdds:{id:""btcOdds"",paneName:""btcOdds"",label:""Primary UP/DOWN"",shortLabel:""Primary"",color:B,axisLabel:""UP / DOWN"",weight:1,kind:""odds""},ethOdds:{id:""ethOdds"",paneName:""ethOdds"",label:""Secondary UP/DOWN"",shortLabel:""Secondary"",color:P,axisLabel:""UP / DOWN"",weight:1,kind:""odds""},behavior:{id:""behavior"",paneName:""behavior"",label:""BEHAVIORAL"",shortLabel:""STATE"",color:K,weight:1.08,kind:""behavior""}},Ye=[""pair"",""underlying"",""btcLog"",""ethLog"",""btcOdds"",""ethOdds"",""behavior""],_e=[""underlying"",""btcLog"",""btcOdds""],je={selectedIndex:0,filteredMarketIndexes:[],selectedSymbols:[],userSelectedSymbols:!1,hoverSample:null,hoverEvent:null,isDraggingTime:!1,dragPointerId:null,dragStartOffset:null,dragCurrentOffset:null,fixedGrid:!1,plot:{left:96,right:28,top:28,bottom:50,width:0,height:0,chartTop:0,chartBottom:0},panes:{pair:{top:0,height:0,range:{min:0,max:2}},btc:{top:0,height:0,range:{min:-1,max:1}},eth:{top:0,height:0,range:{min:-1,max:1}},underlying:{top:0,height:0,range:{min:0,max:1},secondaryRange:{min:0,max:1}},btcOdds:{top:0,height:0,range:{min:0,max:1}},ethOdds:{top:0,height:0,range:{min:0,max:1}},behavior:{top:0,height:0,range:{min:-20,max:20}}},width:0,height:0,marketButtons:[],marketButtonByKey:new Map,sessionEntries:[],fixedBtcMoveRange:null,fixedEthMoveRange:null,fixedBehaviorRange:null,visibleChartIds:[""pair"",""btcOdds"",""ethOdds""],sidePanelCollapsed:!1,savedMarketKey:null,draggingChartId:null,dropTargetChartId:null,drawScheduled:!1,staticCacheKey:""""},Ve=10,Je=.25,ze=.22,qe=2,Xe=""cryptoPriceHistoryState:v2"";let Ze=null,Qe=!1;function et(){return je.selectedSymbols[0]||""Asset 1""}function tt(){return je.selectedSymbols[1]||""Asset 2""}function nt(){return 2===je.selectedSymbols.length?``${et()}/${tt()}``:1===je.selectedSymbols.length?et():""Select Symbol""}function rt(){return je.selectedSymbols.length===qe}function it(){return 1===je.selectedSymbols.length}function st(){return rt()?Ye:it()?_e:[]}function at(e){return st().includes(e)}function ot(){const e=st(),t=je.visibleChartIds.filter(t=>e.includes(t)&&Ge[t]);je.visibleChartIds=t.length||!e.length?t:rt()?[""pair"",""btcOdds"",""ethOdds""]:it()?[""btcOdds"",""btcLog"",""underlying""]:[]}function lt(){return``${et()}_UP_${tt()}_DOWN``}function dt(){return``${tt()}_UP_${et()}_DOWN``}function ct(t){const n=new Map((e?e.availableSymbols:[]).map((e,t)=>[e,t]));return[...t].sort((e,t)=>(n.has(e)?n.get(e):Number.MAX_SAFE_INTEGER)-(n.has(t)?n.get(t):Number.MAX_SAFE_INTEGER)||e.localeCompare(t))}function ut(t){const n=new Set(e?e.availableSymbols:[]),r=[];for(const e of Array.isArray(t)?t:[]){const t=String(e||"""").toUpperCase();if(n.has(t)&&!r.includes(t)&&(r.push(t),r.length>=qe))break}return ct(r)}function ht(){const t=ut(je.selectedSymbols);if(t.length===qe||je.userSelectedSymbols)return void(je.selectedSymbols=t);const n=function(){if(!e||!e.availableSymbols.length)return[];const t=ut([""BTC"",""ETH""]);return t.length===qe?t:e.availableSymbols.slice(0,qe)}();je.selectedSymbols=n.length>t.length?n:t}function mt(e,t=4){return null==e?""-"":Number.isFinite(Number(e))?Number(e).toFixed(t):""-""}function ft(e){return Number(e||0).toLocaleString()}function gt(e,t=2){if(null==e)return""-"";const n=Number(e);if(!Number.isFinite(n))return""-"";return``${n>0?""+"":""""}${n.toFixed(t)}``}function pt(e){const t=Math.abs(Number(e));return Number.isFinite(t)?gt(e,t>=100?0:t>=10?1:2):""-""}function bt(e,t){const n=e[t];if(null==n)return null;const r=Number(n);return Number.isFinite(r)?r:null}function yt(e){const t=bt(e,ne);if(null!==t)return t;const n=bt(e,Z),r=bt(e,ee);return null!==n&&null!==r?n-r:null}function xt(e){const t=bt(e,re);if(null!==t)return t;const n=bt(e,Q),r=bt(e,te);return null!==n&&null!==r?n-r:null}function vt(e){return null==e?null:1e4*e}function St(e){return vt(bt(e,ie))}function kt(e){return vt(bt(e,se))}function Mt(e){return!Number.isFinite(e)||Math.abs(e)<=Je?0:e>0?1:-1}function wt(e){return""SYNC""===e?A:""DELAYED FOLLOW""===e?D:""CROSSOVER INSTABILITY""===e?R:F}function Nt(e){if(!e||!Number.isFinite(e.score))return""transparent"";const t=Math.min(1,Math.abs(e.score)/70);return""SYNC""===e.state?``rgba(103, 185, 111, ${.04+.1*t})``:""DELAYED FOLLOW""===e.state?``rgba(217, 179, 109, ${.06+.16*t})``:""CROSSOVER INSTABILITY""===e.state?``rgba(240, 140, 108, ${.07+.18*t})``:``rgba(255, 111, 105, ${.08+.22*t})``}function Ct(e){return String(e??"""").replaceAll(""&"",""&amp;"").replaceAll(""<"",""&lt;"").replaceAll("">"",""&gt;"").replaceAll('""',""&quot;"")}function Lt(e){return String(e).padStart(2,""0"")}function Et(e,t){const n=new Date(e.marketStart);return n.setSeconds(n.getSeconds()+Number(t||0)),n}function It(e){return[e.getFullYear(),""-"",Lt(e.getMonth()+1),""-"",Lt(e.getDate()),"" "",Lt(e.getHours()),"":"",Lt(e.getMinutes()),"":"",Lt(e.getSeconds())].join("""")}function Tt(e){return[Lt(e.getHours()),"":"",Lt(e.getMinutes()),"":"",Lt(e.getSeconds())].join("""")}function Ot(e){const t=Math.max(0,Number(e||0));return``${Math.floor(t/60)}:${Lt(t%60)}``}function $t(e,t,n){return Math.max(t,Math.min(n,e))}function Bt(){return t&&Array.isArray(t.markets)?t.markets[je.selectedIndex]:null}function Pt(){const e=function(){try{const e=localStorage.getItem(Xe);return e?JSON.parse(e):null}catch(e){return null}}();if(!e||""object""!=typeof e)return;const t=ut(e.selectedSymbols);t.length&&(je.selectedSymbols=t),""boolean""==typeof e.userSelectedSymbols&&(je.userSelectedSymbols=e.userSelectedSymbols),""boolean""==typeof e.fixedGrid&&(je.fixedGrid=e.fixedGrid,k.checked=je.fixedGrid);const n=function(e){if(!Array.isArray(e))return null;const t=[];for(const n of e)Ge[n]&&!t.includes(n)&&t.push(n);return t.length?t:null}(e.visibleChartIds);n&&(je.visibleChartIds=n),""boolean""==typeof e.sidePanelCollapsed&&(je.sidePanelCollapsed=e.sidePanelCollapsed),""string""==typeof e.selectedMarketKey&&(je.savedMarketKey=e.selectedMarketKey)}function At(){try{localStorage.setItem(Xe,JSON.stringify({selectedSymbols:je.selectedSymbols,userSelectedSymbols:je.userSelectedSy", %dashboardFile%
+    if ErrorLevel {
+        FileDelete, %dashboardFile%
+        return false
+    }
+
+    FileAppend, % "mbols,selectedMarketKey:Bt()?Bt().marketKey:null,fixedGrid:je.fixedGrid,visibleChartIds:je.visibleChartIds,sidePanelCollapsed:je.sidePanelCollapsed}))}catch(e){}}function Dt(){return je.visibleChartIds.filter(at).map(e=>Ge[e]).filter(Boolean)}function Rt(e){return at(e)&&je.visibleChartIds.includes(e)}function Ft(e,t){return rt()&&(""btcOdds""===e&&""ethOdds""===t||""ethOdds""===e&&""btcOdds""===t)}function Kt(){ot(),cn(),dn(),In(),Fn(),Wn(),Cn(),At()}function Wt(e){return t&&Array.isArray(t.markets)?t.markets.findIndex(t=>t.marketKey===e):-1}function Ut(e){return je.sessionEntries.find(t=>t.marketKey===e)||null}function Ht(e){if(e._behaviorSeries)return e._behaviorSeries;const t=[],n=new Map;let r=-1,i=null;const s=e.samples||[];for(let e=0;e<s.length;e+=1){const a=s[e],o=Number(a[_]||0),l=o-Ve;for(;r+1<e&&Number(s[r+1][_]||0)<=l;)r+=1;const d=St(a),c=kt(a),u=r>=0?s[r]:null,h=u?St(u):null,m=u?kt(u):null,f=Number.isFinite(d)&&Number.isFinite(h)?d-h:0,g=Number.isFinite(c)&&Number.isFinite(m)?c-m:0;let p=null,b=null,y=""SYNC"",x=null,v=null,S=!1,k=!1;if(Number.isFinite(d)&&Number.isFinite(c)){const e=Mt(d),t=Mt(c);if(x=Math.abs(d-c),v=Math.abs(f-g),S=0!==e&&0!==t&&e!==t,k=e!==t&&!S,S)y=""DIVERGENCE"",b=-(x+14+2*v);else if(k)y=""DELAYED FOLLOW"",b=-(.85*x+6+1.5*v);else{const e=.42*x+1.2*v;b=10-e,(b<0||Math.min(Math.abs(d),Math.abs(c))<1&&v>.4)&&(y=""CROSSOVER INSTABILITY"",b=Math.min(b,-Math.max(1,e-8)))}i=null===i?b:i+ze*(b-i),p=i}const M={sample:a,offset:o,score:p,rawScore:b,state:y,distance:x,momentumGap:v,btcVelocity:f,ethVelocity:g,opposite:S,delayed:k};t.push(M),n.set(String(o),M)}return e._behaviorSeries=t,e._behaviorByOffset=n,t}function Gt(e,t){return Ht(e),e._behaviorByOffset.get(String(t[_]))||null}function Yt(e){let n=1/0,r=-1/0;for(const i of t.markets||[])for(const t of i.samples||[]){const i=e(t);Number.isFinite(i)&&(n=Math.min(n,i),r=Math.max(r,i))}if(!Number.isFinite(n)||!Number.isFinite(r))return{min:-1,max:1};let i=r-n;(!Number.isFinite(i)||i<=0)&&(i=.04*Math.max(Math.abs(r),1));const s=Math.max(.1*i,.01*Math.max(Math.abs(n),Math.abs(r),1));return{min:n-s,max:r+s}}function _t(e){if(je.fixedGrid)return{min:0,max:2};if(!e||!e.samples.length)return{min:0,max:2};let t=1/0,n=-1/0;for(const r of e.samples)t=Math.min(t,r[j],r[V]),n=Math.max(n,r[j],r[V]);for(const r of(e.events||[]).filter(on)){const i=sn(r,e);Number.isFinite(i)&&(t=Math.min(t,i),n=Math.max(n,i))}let r=n-t;(!Number.isFinite(r)||r<=0)&&(r=.02);const i=Math.max(.12*r,.015);return{min:Math.max(0,t-i),max:Math.min(2,n+i)}}function jt(e,t,n=null){if(je.fixedGrid&&n)return n;if(!e||!e.samples.length)return{min:-1,max:1};let r=1/0,i=-1/0,s=!1;for(const n of e.samples){const e=t(n);Number.isFinite(e)&&(s=!0,r=Math.min(r,e),i=Math.max(i,e))}if(!s)return{min:-1,max:1};let a=i-r;(!Number.isFinite(a)||a<=0)&&(a=.04*Math.max(Math.abs(i),1));const o=Math.max(.1*a,.01*Math.max(Math.abs(r),Math.abs(i),1));return{min:r-o,max:i+o}}function Vt(e,t,n){if(je.fixedGrid)return{min:0,max:1};if(!e||!e.samples.length)return{min:0,max:1};let r=1/0,i=-1/0;for(const s of e.samples)for(const e of[t,n]){const t=bt(s,e);Number.isFinite(t)&&(r=Math.min(r,t),i=Math.max(i,t))}if(!Number.isFinite(r)||!Number.isFinite(i))return{min:0,max:1};const s=i-r||.02,a=Math.max(.14*s,.02);return{min:Math.max(0,r-a),max:Math.min(1,i+a)}}function Jt(e,t,n){if(!e||!e.samples.length)return{min:0,max:1};let r=1/0,i=-1/0;for(const s of e.samples)for(const e of[t,n]){const t=bt(s,e);Number.isFinite(t)&&(r=Math.min(r,t),i=Math.max(i,t))}if(!Number.isFinite(r)||!Number.isFinite(i))return{min:0,max:1};if(Math.abs(i-r)<1e-6){const e=Math.max(1e-4*Math.abs(i),1);return{min:r-e,max:i+e}}return{min:r,max:i}}function zt(e){return e&&e.samples.length?je.fixedGrid?function(){if(je.fixedBehaviorRange)return je.fixedBehaviorRange;const e=[];for(const n of t.markets||[])e.push(...Ht(n));return je.fixedBehaviorRange=qt(e),je.fixedBehaviorRange}():qt(Ht(e)):{min:-1,max:1}}function qt(e){let t=1/0,n=-1/0,r=!1;for(const i of e||[])Number.isFinite(i.score)&&(r=!0,t=Math.min(t,i.score),n=Math.max(n,i.score));if(!r)return{min:-1,max:1};let i=n-t;(!Number.isFinite(i)||i<=0)&&(i=.04*Math.max(Math.abs(n),1));const s=Math.max(.08*i,.01*Math.max(Math.abs(t),Math.abs(n),1));return{min:t-s,max:n+s}}function Xt(e){Rt(""pair"")&&(je.panes.pair.range=_t(e)),Rt(""btcLog"")&&(je.panes.btc.range=jt(e,yt,je.fixedGrid?(je.fixedBtcMoveRange||(je.fixedBtcMoveRange=Yt(yt)),je.fixedBtcMoveRange):null)),Rt(""ethLog"")&&(je.panes.eth.range=jt(e,xt,je.fixedGrid?(je.fixedEthMoveRange||(je.fixedEthMoveRange=Yt(xt)),je.fixedEthMoveRange):null)),Rt(""btcOdds"")&&(je.panes.btcOdds.range=Vt(e,J,z)),Rt(""ethOdds"")&&(je.panes.ethOdds.range=Vt(e,q,X)),Rt(""underlying"")&&(je.panes.underlying.range=Jt(e,Z,ee),rt()&&(je.panes.underlying.secondaryRange=Jt(e,Q,te))),Rt(""behavior"")&&(je.panes.behavior.range=zt(e))}function Zt(e){const t=je.plot;return t.left+Number(e)/900*t.width}function Qt(e,t=""pair""){const n=je.panes[t],r=n.range;if(null==e)return NaN;const i=r.max-r.min||1;return n.top+(r.max-Number(e))/i*n.height}function en(e,t=""btc""){const n=je.panes.underlying,r=""eth""===t?n.secondaryRange:n.range;if(null==e)return NaN;const i=r.max-r.min||1;return n.top+(r.max-Number(e))/i*n.height}function tn(e){const t=o.getBoundingClientRect();return{x:e.clientX-t.left,y:e.clientY-t.top}}function nn(e){const t=je.plot;return $t((e-t.left)/t.width*900,0,900)}function rn(e,t){const n=e.samples;if(!n.length)return null;let r=0,i=n.length-1;for(;r<i;){const e=Math.floor((r+i)/2);n[e][0]<t?r=e+1:i=e}const s=n[r],a=n[Math.max(0,r-1)];return a&&Math.abs(a[0]-t)<=Math.abs(s[0]-t)?a:s}function sn(e,t){if(Number.isFinite(Number(e.sum)))return Number(e.sum);const n=rn(t,Number(e.offsetSec||0));return n?n[Number(e.seriesColumn||(r=e.pairName,r===lt()?j:V))]:null;var r}function an(e){return{entry:""Entry order"",fill:""Position fill"",lock:""Position locked"",exit:""Exit trigger"",exit_failed:""Exit failed"",max_shots:""Max shots"",resolution:""Held to resolution""}[e]||e}functio", %dashboardFile%
+    if ErrorLevel {
+        FileDelete, %dashboardFile%
+        return false
+    }
+
+    FileAppend, % "n on(e){return!1!==e.draw&&""fill""!==e.type&&""exit""!==e.type}function ln(){const e=o.getBoundingClientRect(),t=window.devicePixelRatio||1;je.width=Math.max(1,Math.floor(e.width)),je.height=Math.max(1,Math.floor(e.height)),o.width=Math.floor(je.width*t),o.height=Math.floor(je.height*t),c.width=o.width,c.height=o.height,d.setTransform(t,0,0,t,0,0),u.setTransform(t,0,0,t,0,0),cn(),Wn(),dn(),Cn()}function dn(){je.staticCacheKey=""""}function cn(){const e=Rt(""underlying""),t=e&&rt();je.plot.left=e?je.width<560?78:106:je.width<560?68:96,je.plot.right=t?je.width<560?70:92:je.width<560?18:28,je.plot.top=je.width<560?24:28,je.plot.bottom=je.width<560?44:50,je.plot.width=je.width-je.plot.left-je.plot.right,je.plot.height=je.height-je.plot.top-je.plot.bottom;const n=je.width<560?20:24;for(const e of Object.values(je.panes))e.top=0,e.height=0;const r=Dt();if(!r.length)return je.plot.chartTop=je.plot.top,void(je.plot.chartBottom=je.plot.top);const i=Math.max(1,je.plot.height-n*Math.max(0,r.length-1)),s=r.reduce((e,t)=>e+(t.weight||1),0),a=je.width<560?82:110,o=i/r.length<a;let l=je.plot.top,d=0;r.forEach((e,t)=>{const c=je.panes[e.paneName];c.top=l,t===r.length-1?c.height=Math.max(1,i-d):c.height=o?Math.max(1,Math.floor(i/r.length)):Math.max(a,Math.round(i*(e.weight||1)/s)),d+=c.height,l+=c.height+n});const c=je.panes[r[0].paneName],u=je.panes[r[r.length-1].paneName];je.plot.chartTop=c.top,je.plot.chartBottom=u.top+u.height}function un(){const e=je.panes.pair,t=je.plot,n=e.range,r=je.fixedGrid?Array.from({length:11},(e,t)=>.2*t):Array.from({length:6},(e,t)=>n.min+(n.max-n.min)*t/5);l.save(),l.lineWidth=1,l.font=""12px Inter, system-ui, sans-serif"",l.textBaseline=""middle"";for(const e of r){const n=Qt(e,""pair"");l.strokeStyle=L,l.beginPath(),l.moveTo(t.left,n),l.lineTo(t.left+t.width,n),l.stroke(),l.textAlign=""right"",l.fillStyle=T,je.fixedGrid&&Math.abs(e-1)<1e-4||l.fillText(mt(e,3),t.left-10,n)}if(n.min<=1&&n.max>=1){const e=Qt(1,""pair"");l.strokeStyle=Y,l.lineWidth=1.4,l.beginPath(),l.moveTo(t.left,e),l.lineTo(t.left+t.width,e),l.stroke(),l.fillStyle=I,l.textAlign=""right"",l.textBaseline=""bottom"",l.fillText(""1.000"",t.left-10,e-4)}l.fillStyle=I,l.font=""700 19px Inter, system-ui, sans-serif"",l.textAlign=""right"",l.textBaseline=""top"",l.fillText(nt(),t.left+t.width-2,e.top+8),l.restore()}function hn(e){const t=Number(e);if(!Number.isFinite(t))return""-"";const n=Math.abs(t);return n>=1e4?t.toLocaleString(void 0,{maximumFractionDigits:0}):n>=1e3?t.toLocaleString(void 0,{maximumFractionDigits:1}):t.toLocaleString(void 0,{maximumFractionDigits:2})}function mn(e,t){for(const n of e.samples||[]){const e=bt(n,t);if(Number.isFinite(e))return e}return null}function fn(e,t,n,r){l.strokeStyle=r,l.lineWidth=4,l.lineCap=""round"",l.beginPath(),l.moveTo(e,t),l.lineTo(e+16*n,t),l.stroke(),l.lineCap=""butt""}function gn(e,t,n,r,i=!1){if(!Number.isFinite(e))return;const s=je.panes.underlying,a=je.plot,o=en(e,t);if(!Number.isFinite(o))return;l.save(),l.strokeStyle=n,l.globalAlpha=.72,l.lineWidth=1.5,l.setLineDash([3,9]),l.beginPath(),l.moveTo(a.left,o),l.lineTo(a.left+a.width,o),l.stroke(),l.setLineDash([]),l.globalAlpha=1,l.fillStyle=n,l.font=""700 11px Inter, system-ui, sans-serif"",l.textBaseline=""top"",l.textAlign=i?""left"":""right"";const d=i?a.left+a.width+24:a.left-24;l.fillText(""open"",d,$t(o+4,s.top+4,s.top+s.height-14)),l.restore()}function pn(e){const t=je.panes.underlying,n=je.plot,r=rt(),i=t.range,s=t.secondaryRange,a=mn(e,ee),o=mn(e,te),d=n.left+n.width;l.save(),l.font=""12px Inter, system-ui, sans-serif"",l.textBaseline=""middle"",l.lineWidth=1;for(const e of[i.max,i.min]){const t=en(e,""btc"");l.strokeStyle=L,l.beginPath(),l.moveTo(n.left,t),l.lineTo(d,t),l.stroke(),fn(n.left,t,-1,B),l.fillStyle=B,l.textAlign=""right"",l.fillText(hn(e),n.left-24,t)}if(r)for(const e of[s.max,s.min]){const t=en(e,""eth"");fn(d,t,1,P),l.fillStyle=P,l.textAlign=""left"",l.fillText(hn(e),d+24,t)}if(Number.isFinite(a)){const e=en(a,""btc"");fn(n.left,e,-1,H),l.fillStyle=B,l.textAlign=""right"",l.fillText(hn(a),n.left-24,e)}if(r&&Number.isFinite(o)){const e=en(o,""eth"");fn(d,e,1,H),l.fillStyle=P,l.textAlign=""left"",l.fillText(hn(o),d+24,e)}gn(a,""btc"",B,et()),r&&gn(o,""eth"",P,tt(),!0),l.save(),l.translate(je.width<560?17:22,t.top+t.height/2),l.rotate(-Math.PI/2),l.fillStyle=E,l.font=""700 12px Inter, system-ui, sans-serif"",l.textAlign=""center"",l.textBaseline=""middle"",l.fillText(``${et()} price``,0,0),l.restore(),r&&(l.save(),l.translate(je.width-(je.width<560?17:22),t.top+t.height/2),l.rotate(Math.PI/2),l.fillStyle=E,l.font=""700 12px Inter, system-ui, sans-serif"",l.textAlign=""center"",l.textBaseline=""middle"",l.fillText(``${tt()} price``,0,0),l.restore(),l.strokeStyle=E,l.lineWidth=1.2,l.beginPath(),l.moveTo(d,t.top),l.lineTo(d,t.top+t.height),l.stroke()),l.fillStyle=H,l.font=""700 23px Inter, system-ui, sans-serif"",l.textAlign=""right"",l.textBaseline=""top"",l.fillText(""PRICE"",d-2,t.top+8),l.restore()}function bn(e,t,n){const r=je.panes[e],i=je.plot,s=r.range,a=s.max-s.min||1,o=[s.min,s.min+.25*a,.5,s.min+.75*a,s.max].filter((e,t,n)=>0===t||Math.abs(e-n[t-1])>.001);l.save(),l.lineWidth=1,l.font=""12px Inter, system-ui, sans-serif"",l.textBaseline=""middle"";for(const t of o){const n=Qt(t,e);l.strokeStyle=Math.abs(t-.5)<.001?Y:L,l.lineWidth=Math.abs(t-.5)<.001?1.4:1,Math.abs(t-.5)<.001&&l.setLineDash([3,8]),l.beginPath(),l.moveTo(i.left,n),l.lineTo(i.left+i.width,n),l.stroke(),l.setLineDash([]),l.fillStyle=Math.abs(t-.5)<.001?I:T,l.textAlign=""right"",l.fillText(mt(t,3),i.left-10,n)}l.save(),l.translate(je.width<560?15:20,r.top+r.height/2),l.rotate(-Math.PI/2),l.fillStyle=E,l.font=""600 12px Inter, system-ui, sans-serif"",l.textAlign=""center"",l.textBaseline=""middle"",l.fillText(""UP / DOWN"",0,0),l.restore(),l.fillStyle=n,l.font=""700 23px Inter, system-ui, sans-serif"",l.textAlign=""right"",l.textBaseline=""top"",l.fillText(t,i.left+i.width-2,r.top+8),l.restore()}function yn(e){const t=Math.abs(Number(e));return mt(e,t>=100?0:t>=10?1:2)}function xn(e,t,n,r){const i=je.panes[e],s=je.plot,a=i.range", %dashboardFile%
+    if ErrorLevel {
+        FileDelete, %dashboardFile%
+        return false
+    }
+
+    FileAppend, % ",o=a.max-a.min||1,d=[a.min,a.min+.25*o,a.min+.5*o,a.min+.75*o,a.max];l.save(),l.lineWidth=1,l.font=""12px Inter, system-ui, sans-serif"",l.textBaseline=""middle"";for(const t of d){const n=Qt(t,e);l.strokeStyle=L,l.beginPath(),l.moveTo(s.left,n),l.lineTo(s.left+s.width,n),l.stroke()}if(a.min<=0&&a.max>=0){const t=Qt(0,e);l.strokeStyle=Y,l.lineWidth=1.4,l.setLineDash([3,8]),l.beginPath(),l.moveTo(s.left,t),l.lineTo(s.left+s.width,t),l.stroke(),l.setLineDash([]),l.fillStyle=I,l.textAlign=""right"",l.fillText(""0"",s.left-10,t)}l.fillStyle=T,l.textAlign=""right"",l.fillText(yn(a.max),s.left-10,i.top+8),l.fillText(yn(a.min),s.left-10,i.top+i.height-8),l.save(),l.translate(je.width<560?15:20,i.top+i.height/2),l.rotate(-Math.PI/2),l.fillStyle=E,l.font=""600 12px Inter, system-ui, sans-serif"",l.textAlign=""center"",l.textBaseline=""middle"",l.fillText(r,0,0),l.restore(),l.fillStyle=n,l.font=""700 27px Inter, system-ui, sans-serif"",l.textAlign=""right"",l.textBaseline=""bottom"",l.fillText(t,s.left+s.width-2,i.top-8),l.restore()}function vn(){const e=je.panes.behavior,t=je.plot,n=e.range,r=n.max-n.min||1,i=[n.min,n.min+.25*r,n.min+.5*r,n.min+.75*r,n.max];n.min<0&&n.max>0&&i.push(0),i.sort((e,t)=>e-t),l.save(),l.lineWidth=1,l.font=""12px Inter, system-ui, sans-serif"",l.textBaseline=""middle"";for(const e of i.filter((e,t,n)=>0===t||Math.abs(e-n[t-1])>.001)){const n=Qt(e,""behavior"");l.strokeStyle=Math.abs(e)<.001?Y:L,l.lineWidth=Math.abs(e)<.001?1.5:1,Math.abs(e)<.001&&l.setLineDash([3,8]),l.beginPath(),l.moveTo(t.left,n),l.lineTo(t.left+t.width,n),l.stroke(),l.setLineDash([]),l.fillStyle=Math.abs(e)<.001?I:T,l.textAlign=""right"",l.fillText(yn(e),t.left-10,n)}l.save(),l.translate(je.width<560?15:20,e.top+e.height/2),l.rotate(-Math.PI/2),l.fillStyle=E,l.font=""600 12px Inter, system-ui, sans-serif"",l.textAlign=""center"",l.textBaseline=""middle"",l.fillText(""behavior score"",0,0),l.restore(),l.font=""700 11px Inter, system-ui, sans-serif"",l.textAlign=""left"",l.textBaseline=""middle"",l.fillStyle=A,l.fillText(""SYNC"",t.left+12,e.top+.18*e.height),l.fillStyle=D,l.fillText(""DELAYED FOLLOW"",t.left+12,e.top+.42*e.height),l.fillStyle=R,l.textAlign=""right"",l.fillText(""CROSSOVER INSTABILITY"",t.left+t.width-12,e.top+.62*e.height),l.fillStyle=F,l.fillText(""DIVERGENCE"",t.left+t.width-12,e.top+.82*e.height),l.fillStyle=K,l.font=""700 24px Inter, system-ui, sans-serif"",l.textAlign=""right"",l.textBaseline=""bottom"",l.fillText(""STATE"",t.left+t.width-2,e.top-8),l.restore()}function Sn(e,t,n,r=""pair"",i=null,s=null,a=null){if(!e.length)return;l.save(),l.strokeStyle=n,l.lineWidth=s||(""pair""===r?3:3.2),l.lineJoin=""round"",l.lineCap=""round"",l.beginPath();let o=!1;for(const n of e){if(null!==a&&Number(n[_])>a)break;const e=i?i(n):n[t];if(null==e||!Number.isFinite(Number(e))){o=!1;continue}const s=Zt(n[_]),d=Qt(e,r);o?l.lineTo(s,d):(l.moveTo(s,d),o=!0)}l.stroke(),l.restore()}function kn(e,t,n,r,i=null){if(!e.length)return;l.save(),l.strokeStyle=r,l.lineWidth=3.4,l.lineJoin=""round"",l.lineCap=""round"",l.beginPath();let s=!1,a=null;for(const r of e){if(null!==i&&Number(r[_])>i)break;const e=bt(r,t);if(!Number.isFinite(e)){s=!1;continue}const o=Zt(r[_]),d=en(e,n);s?l.lineTo(o,d):(l.moveTo(o,d),s=!0),a={x:o,y:d}}l.stroke(),a&&(l.fillStyle=r,l.strokeStyle=C,l.lineWidth=2,l.beginPath(),l.arc(a.x,a.y,5,0,2*Math.PI),l.fill(),l.stroke()),l.restore()}function Mn(e,t,n=!1){if(!on(e))return;if(!Rt(""pair"")||je.panes.pair.height<=0)return;const r=sn(e,t);if(!Number.isFinite(r))return;const i=Zt(e.offsetSec),s=Qt(r,""pair""),a=n?8:6,o=function(e){return""exit""===e.type||""exit_failed""===e.type?U:""fill""===e.type?W:""resolution""===e.type?H:e.pairName===lt()?O:$}(e);l.save(),l.lineWidth=n?3:2,l.strokeStyle=n?H:o,l.fillStyle=""entry""===e.type?C:o,""exit""===e.type?(l.beginPath(),l.moveTo(i,s-a),l.lineTo(i+a,s+a),l.lineTo(i-a,s+a),l.closePath(),l.fill(),l.stroke()):""resolution""===e.type?(l.beginPath(),l.rect(i-a+1,s-a+1,2*(a-1),2*(a-1)),l.fill(),l.stroke()):(l.beginPath(),l.arc(i,s,""fill""===e.type?a-1:a,0,2*Math.PI),l.fill(),l.stroke()),""entry""===e.type&&e.shot&&(l.fillStyle=I,l.font=""10px Inter, system-ui, sans-serif"",l.textAlign=""center"",l.textBaseline=""bottom"",l.fillText(String(e.shot),i,s-a-3)),l.restore()}function wn(e){if(je.hoverEvent){const t=je.hoverEvent,n=sn(t,e);if(!Number.isFinite(n))return;const r=Zt(t.offsetSec),i=Qt(n,""pair"");return l.save(),l.strokeStyle=G,l.lineWidth=1,l.setLineDash([4,5]),l.beginPath(),l.moveTo(r,je.plot.chartTop),l.lineTo(r,je.plot.chartBottom),l.stroke(),l.setLineDash([]),l.restore(),Mn(t,e,!0),void function(e,t,n,r){const i=sn(t,e),s=[[""Event"",an(t.type),""""],[""Pair"",t.seriesLabel||t.pairName,t.pairName===lt()?""green"":""red""],[""Pair sum"",Number.isFinite(i)?mt(i):""-"",""""]];t.shot&&s.push([""Shot"",``${t.shot}${t.totalShots?`` / ${t.totalShots}``:""""}``,""""]);Number.isFinite(Number(t.threshold))&&s.push([""Exit threshold"",mt(t.threshold),""""]);t.rawOffsetSec!==t.offsetSec&&s.push([""Plotted at"",Ot(t.offsetSec),""""]);s.push([""Message"",t.message||"""",""""]),p.innerHTML=[``<div class=""tooltip-time"">${t.timestampLabel||It(Et(e,t.offsetSec))} (${Ot(t.rawOffsetSec??t.offsetSec)})</div>``,...s.map(([e,t,n])=>``<div class=""tip-row ${n}""><span>${Ct(e)}</span><strong>${Ct(t)}</strong></div>``)].join("""");const a=g.getBoundingClientRect(),o=p.getBoundingClientRect(),l=n+16,d=r-18,c=Math.min(Math.max(10,l),a.width-o.width-10),u=Math.min(Math.max(10,d),a.height-o.height-10);p.style.left=``${c}px``,p.style.top=``${u}px``,p.classList.add(""visible"")}(e,t,r,i)}const t=je.hoverSample;if(!t)return;const n=Zt(t[_]),r=Rt(""behavior"")?Gt(e,t):null,i=[];for(const e of Dt())""pair""===e.id?(i.push([Qt(t[j],""pair""),O]),i.push([Qt(t[V],""pair""),$])):""btcLog""===e.id?i.push([Qt(yt(t),""btc""),B]):""ethLog""===e.id?i.push([Qt(xt(t),""eth""),P]):""underlying""===e.id?(i.push([en(bt(t,Z),""btc""),B]),rt()&&i.push([en(bt(t,Q),""eth""),P])):""btcOdds""===e.id?(i.push([Qt(t[J],""btcOdds""),O]),i.push([Qt(t[z],""btcOdds""),$])):""ethOdds""===e.id?(i.push([Qt(t[q],""ethOdds""),O]),i.push([Qt(t[X],""ethOdds""),$])):""behavior""===e.id&&r&&i.pus", %dashboardFile%
+    if ErrorLevel {
+        FileDelete, %dashboardFile%
+        return false
+    }
+
+    FileAppend, % "h([Qt(r.score,""behavior""),wt(r.state)]);l.save(),l.strokeStyle=G,l.lineWidth=1,l.setLineDash([4,5]),l.beginPath(),l.moveTo(n,je.plot.chartTop),l.lineTo(n,je.plot.chartBottom),l.stroke(),l.setLineDash([]);for(const[e,t]of i)Number.isFinite(e)&&(l.fillStyle=C,l.strokeStyle=t,l.lineWidth=3,l.beginPath(),l.arc(n,e,5,0,2*Math.PI),l.fill(),l.stroke());l.restore();!function(e,t,n,r){const i=Rt(""behavior"")?Gt(e,t):null,s=i?(o=i.state,""SYNC""===o?""sync"":""DELAYED FOLLOW""===o?""delay"":""CROSSOVER INSTABILITY""===o?""unstable"":""divergence""):"""",a=[];var o;for(const e of Dt())""pair""===e.id?(a.push([lt(),t[j],""green""]),a.push([dt(),t[V],""red""])):""underlying""===e.id?(a.push([``${et()} current / open``,``${mt(t[Z],2)} / ${mt(t[ee],2)}``,""btc""]),rt()&&a.push([``${tt()} current / open``,``${mt(t[Q],2)} / ${mt(t[te],2)}``,""eth""])):""btcLog""===e.id?a.push([``${et()} delta``,pt(yt(t)),""btc""]):""ethLog""===e.id?a.push([``${tt()} delta``,pt(xt(t)),""eth""]):""btcOdds""===e.id?a.push([``${et()} up / down``,``${mt(t[J])} / ${mt(t[z])}``,""""]):""ethOdds""===e.id?a.push([``${tt()} up / down``,``${mt(t[q])} / ${mt(t[X])}``,""""]):""behavior""===e.id&&(a.push([""Behavior state"",i?i.state:""-"",s]),a.push([""Behavior score"",i?gt(i.score,2):""-"",s]),a.push([""Magnitude gap"",i?``${mt(i.distance,2)} bps``:""-"",s]),a.push([""Momentum gap"",i?``${mt(i.momentumGap,2)} bps / 10s``:""-"",s]));p.innerHTML=[``<div class=""tooltip-time"">${It(Et(e,t[_]))} (${Ot(t[_])})</div>``,...a.map(([e,t,n])=>``<div class=""tip-row ${n}""><span>${e}</span><strong>${t}</strong></div>``)].join("""");const l=g.getBoundingClientRect(),d=p.getBoundingClientRect(),c=n+16,u=r-18,h=Math.min(Math.max(10,c),l.width-d.width-10),m=Math.min(Math.max(10,u),l.height-d.height-10);p.style.left=``${h}px``,p.style.top=``${m}px``,p.classList.add(""visible"")}(e,t,n,i.map(([e])=>e).filter(e=>Number.isFinite(e)).reduce((e,t)=>Math.min(e,t),je.plot.chartTop))}function Nn(){if(!je.isDraggingTime||null===je.dragStartOffset||null===je.dragCurrentOffset)return;const e=je.plot,t=Zt(je.dragStartOffset),n=Zt(je.dragCurrentOffset),r=Math.min(t,n),i=Math.max(t,n),s=``Duration ${function(e){const t=Number(e||0),n=t>0?""+"":t<0?""-"":"""",r=Math.abs(Math.round(t));return``${n}${Math.floor(r/60)}:${Lt(r%60)}``}(je.dragCurrentOffset-je.dragStartOffset)}``,a=$t((r+i)/2,e.left+66,e.left+e.width-66),o=e.chartTop+18;l.save(),l.fillStyle=""rgba(217, 179, 109, 0.12)"",l.fillRect(r,e.chartTop,Math.max(1,i-r),e.chartBottom-e.chartTop),l.strokeStyle=U,l.lineWidth=1.5,l.setLineDash([5,5]);for(const r of[t,n])l.beginPath(),l.moveTo(r,e.chartTop),l.lineTo(r,e.chartBottom),l.stroke();l.setLineDash([]),l.font=""700 12px Inter, system-ui, sans-serif"";const d=l.measureText(s).width+20;l.fillStyle=""rgba(18, 20, 16, 0.92)"",l.strokeStyle=""rgba(217, 179, 109, 0.72)"",l.lineWidth=1,l.beginPath(),l.roundRect(a-d/2,o-13,d,26,6),l.fill(),l.stroke(),l.fillStyle=U,l.textAlign=""center"",l.textBaseline=""middle"",l.fillText(s,a,o),l.restore()}function Cn(){if(je.width<=0||je.height<=0)return;const e=Bt(),t=[je.selectedSymbols.join(""/""),je.selectedIndex,je.fixedGrid?1:0,je.visibleChartIds.join("",""),``${je.width}x${je.height}``].join("":"");je.staticCacheKey!==t&&function(e,t){if(l=u,l.clearRect(0,0,je.width,je.height),l.fillStyle=C,l.fillRect(0,0,je.width,je.height),!e||!e.samples.length)return l.fillStyle=T,l.font=""15px Inter, system-ui, sans-serif"",l.textAlign=""center"",l.textBaseline=""middle"",l.fillText(""No price history for this session"",je.width/2,je.height/2),p.classList.remove(""visible""),je.staticCacheKey=t,void(l=d);if(!je.visibleChartIds.length)return l.fillStyle=T,l.font=""15px Inter, system-ui, sans-serif"",l.textAlign=""center"",l.textBaseline=""middle"",l.fillText(""No active charts"",je.width/2,je.height/2),p.classList.remove(""visible""),je.staticCacheKey=t,void(l=d);Xt(e),Rt(""behavior"")&&function(e,t=null){const n=je.panes.behavior,r=Ht(e);l.save();for(let e=0;e<r.length;e+=1){const i=r[e];if(null!==t&&Number(i.offset)>t)break;if(!Number.isFinite(i.score))continue;const s=r[e+1],a=Zt(i.offset),o=s?Math.min(Number(s.offset),t??Number(s.offset)):Number(i.offset)+2,d=s?Zt(o):a+2;l.fillStyle=Nt(i),l.fillRect(a,n.top,Math.max(1,d-a),n.height)}l.restore()}(e);!function(e){const t=je.plot,n=Dt();l.save(),l.lineWidth=1,l.strokeStyle=L,l.fillStyle=T,l.font=""12px Inter, system-ui, sans-serif"",l.textBaseline=""middle"";const r=n.map(e=>je.panes[e.paneName]),i=[0,180,360,540,720,900];for(const t of i){const n=Zt(t);l.strokeStyle=L;for(const e of r)l.beginPath(),l.moveTo(n,e.top),l.lineTo(n,e.top+e.height),l.stroke();l.textAlign=0===t?""left"":900===t?""right"":""center"",l.textBaseline=""top"",l.fillStyle=T,l.fillText(Tt(Et(e,t)),n,je.plot.chartBottom+12)}for(const t of n)""pair""===t.id?un():""underlying""===t.id?pn(e):""btcLog""===t.id?xn(""btc"",et(),B,""delta""):""ethLog""===t.id?xn(""eth"",tt(),P,""delta""):""btcOdds""===t.id?bn(""btcOdds"",et(),B):""ethOdds""===t.id?bn(""ethOdds"",tt(),P):""behavior""===t.id&&vn();l.strokeStyle=E,l.lineWidth=1.2;for(const e of r)l.beginPath(),l.moveTo(t.left,e.top),l.lineTo(t.left,e.top+e.height),l.lineTo(t.left+t.width,e.top+e.height),l.stroke();l.restore()}(e);for(const t of Dt())Ln(t,e);je.staticCacheKey=t,l=d}(e,t),l=d,l.clearRect(0,0,je.width,je.height),l.drawImage(c,0,0,je.width,je.height),e&&e.samples.length&&(wn(e),Nn())}function Ln(e,t,n=null){""pair""===e.id?(Sn(t.samples,j,O,""pair"",null,null,n),Sn(t.samples,V,$,""pair"",null,null,n),function(e,t=null){for(const n of e.events||[])on(n)&&(null!==t&&Number(n.offsetSec)>t||Mn(n,e,!1))}(t,n)):""btcLog""===e.id?Sn(t.samples,null,B,""btc"",yt,null,n):""ethLog""===e.id?Sn(t.samples,null,P,""eth"",xt,null,n):""underlying""===e.id?(kn(t.samples,Z,""btc"",B,n),rt()&&kn(t.samples,Q,""eth"",P,n)):""btcOdds""===e.id?(Sn(t.samples,J,O,""btcOdds"",null,2.7,n),Sn(t.samples,z,$,""btcOdds"",null,2.7,n)):""ethOdds""===e.id?(Sn(t.samples,q,O,""ethOdds"",null,2.7,n),Sn(t.samples,X,$,""ethOdds"",null,2.7,n)):""behavior""===e.id&&(function(e,t=null){const n=je.panes.behavior,r=Ht(e);l.save(),l.lineWidth=1.5,l.setLineDash([3,5]);let i=!1;for(const e of r){if(null!==t&&Number(e.offset)>t)break", %dashboardFile%
+    if ErrorLevel {
+        FileDelete, %dashboardFile%
+        return false
+    }
+
+    FileAppend, % ";if(!Number.isFinite(e.score))continue;if(e.opposite===i)continue;i=e.opposite;const r=Zt(e.offset);l.strokeStyle=e.opposite?F:D,l.beginPath(),l.moveTo(r,n.top),l.lineTo(r,n.top+n.height),l.stroke()}l.restore()}(t,n),function(e,t=null){const n=Ht(e);l.save(),l.lineJoin=""round"",l.lineCap=""round"",l.lineWidth=6,l.strokeStyle=""rgba(242, 234, 211, 0.18)"",l.beginPath();let r=!1;for(let e=1;e<n.length;e+=1){const i=n[e-1],s=n[e];if(null!==t&&Number(s.offset)>t)break;Number.isFinite(i.score)&&Number.isFinite(s.score)&&(r||(l.moveTo(Zt(i.offset),Qt(i.score,""behavior"")),r=!0),l.lineTo(Zt(s.offset),Qt(s.score,""behavior"")))}l.stroke();const i={SYNC:new Path2D,""DELAYED FOLLOW"":new Path2D,""CROSSOVER INSTABILITY"":new Path2D,DIVERGENCE:new Path2D};for(let e=1;e<n.length;e+=1){const r=n[e-1],s=n[e];if(null!==t&&Number(s.offset)>t)break;if(!Number.isFinite(r.score)||!Number.isFinite(s.score))continue;const a=i[s.state]||i.DIVERGENCE;a.moveTo(Zt(r.offset),Qt(r.score,""behavior"")),a.lineTo(Zt(s.offset),Qt(s.score,""behavior""))}l.lineWidth=3.1;for(const[e,t]of Object.entries(i))l.strokeStyle=wt(e),l.stroke(t);l.restore()}(t,n))}function En(){je.drawScheduled||(je.drawScheduled=!0,requestAnimationFrame(()=>{je.drawScheduled=!1,Cn()}))}function In(){const e=Bt();if(!e)return;const n=function(){const e=Bt();return e&&je.sessionEntries.length?je.sessionEntries.findIndex(t=>t.marketKey===e.marketKey):je.filteredMarketIndexes.indexOf(je.selectedIndex)}(),r=je.sessionEntries.length||t.markets.length,i=``${n>=0?n+1:je.selectedIndex+1} / ${r}``;document.getElementById(""marketHeading"").textContent=``${e.marketKey} (${i})``,document.getElementById(""marketNames"").textContent=[e.primaryMarketName,e.secondaryMarketName].filter(Boolean).join("" | ""),document.getElementById(""metricWindow"").textContent=``${e.marketStartLabel} to ${e.marketCloseLabel}``,document.getElementById(""metricSamples"").textContent=``${ft(e.sampleCount)} points``;const s=rt()?_t(e):Vt(e,J,z);document.getElementById(""metricRange"").textContent=``${mt(s.min,3)} to ${mt(s.max,3)}``,document.getElementById(""metricAlignment"").textContent=``${mt(e.maxAlignmentSkewSec,0)}s max, ${ft(e.skippedForSkew)} skipped``,v.disabled=n<=0&&!He(-1),S.disabled=n>=r-1&&!He(1)}function Tn(e,n=!0){if(!t.markets.length)return;je.selectedIndex=Math.max(0,Math.min(t.markets.length-1,e)),je.filteredMarketIndexes.includes(je.selectedIndex)||(je.selectedIndex=je.filteredMarketIndexes[0]??0);const r=Bt();if(je.hoverSample=null,je.hoverEvent=null,je.isDraggingTime=!1,je.dragPointerId=null,je.dragStartOffset=null,je.dragCurrentOffset=null,p.classList.remove(""visible""),y.value=r?r.marketKey:"""",je.marketButtonByKey.forEach((e,t)=>{e.classList.toggle(""active"",r&&t===r.marketKey)}),n){!function(e){if(!e)return;const t=x.scrollTop,n=t+x.clientHeight,r=e.offsetTop,i=r+e.offsetHeight;r<t+8?x.scrollTop=Math.max(0,r-8):i>n-8&&(x.scrollTop=i-x.clientHeight+8)}((r?je.marketButtonByKey.get(r.marketKey):null)||je.marketButtons[je.selectedIndex])}In(),Cn(),At()}async function On(t,s=!0){const a=String(t||"""");if(!a)return!1;let o=Ut(a);if(!o&&""sharded""===n){const e=function(e){return Te(ue(e,new Date).close)}(a);if(e.length){const t=ue(a,new Date);o={marketKey:a,close:t.close,closeLabel:he(t.close),shardIndexes:e}}}o&&await async function(t){if(""sharded""!==n||!t||!t.shardIndexes.length)return!1;let s=!1;const a=e?e.signature:"""";for(const e of t.shardIndexes){const t=r&&r.shards?r.shards[e]:null;t&&!i.has(t.file)&&(await Pe(t),s=!0)}return!!s&&(jn(e,{previousSignature:a,force:!0,preferredMarketKey:t.marketKey}),!0)}(o);let l=Wt(a);if(l>=0)return Tn(l,s),!0;je.savedMarketKey=a,o||(je.sessionEntries=$e(),o=Ut(a));const d=Bt();return d&&(je.savedMarketKey=d.marketKey,y.value=d.marketKey),!1}async function $n(e){if(je.sessionEntries.length||(je.sessionEntries=$e()),!je.sessionEntries.length)return;const t=Bt()?Bt().marketKey:je.savedMarketKey;let n=je.sessionEntries.findIndex(e=>e.marketKey===t);n<0&&(n=e>0?-1:je.sessionEntries.length);const i=Math.max(0,Math.min(je.sessionEntries.length-1,n+e));if(i!==n)return void await On(je.sessionEntries[i].marketKey);let s=r&&r.shards?r.shards.length:0;for(;s>0&&await Ue(e);){s-=1,je.sessionEntries=$e();const n=je.sessionEntries.findIndex(e=>e.marketKey===t),r=n>=0?n+e:e<0?je.sessionEntries.length-1:0;if(r>=0&&r<je.sessionEntries.length){const e=je.sessionEntries[r];if(e.marketKey!==t)return void await On(e.marketKey)}}}function Bn(){b.innerHTML="""";for(const t of e?e.availableSymbols:[]){const e=je.selectedSymbols.includes(t),n=!e&&je.selectedSymbols.length>=qe,r=document.createElement(""label"");r.className=``symbol-option${e?"" checked"":""""}${n?"" disabled"":""""}``;const i=document.createElement(""input"");i.type=""checkbox"",i.value=t,i.checked=e,i.disabled=n,i.addEventListener(""change"",()=>{Dn(t,i.checked)});const s=document.createElement(""span"");s.textContent=t,r.appendChild(s),r.appendChild(i),b.appendChild(r)}}function Pn(e){document.getElementById(""marketHeading"").textContent=e,document.getElementById(""marketNames"").textContent="""",document.getElementById(""metricWindow"").textContent=""-"",document.getElementById(""metricSamples"").textContent=""-"",document.getElementById(""metricRange"").textContent=""-"",document.getElementById(""metricAlignment"").textContent=""-"",v.disabled=!0,S.disabled=!0,p.classList.remove(""visible""),dn(),Cn()}function An(n=null,r=!0){t=Re(e,je.selectedSymbols),Ge.pair.label=``${nt()} Combined Odds``,Ge.pair.shortLabel=nt(),Ge.underlying.label=``${nt()} Spot Price${rt()?""s"":""""}``,Ge.btcLog.label=``${et()} Delta``,Ge.btcLog.shortLabel=et(),Ge.ethLog.label=``${tt()} Delta``,Ge.ethLog.shortLabel=tt(),Ge.btcOdds.label=``${et()} UP/DOWN``,Ge.btcOdds.shortLabel=et(),Ge.ethOdds.label=``${tt()} UP/DOWN``,Ge.ethOdds.shortLabel=tt(),ot(),je.fixedBtcMoveRange=null,je.fixedEthMoveRange=null,je.fixedBehaviorRange=null,je.hoverSample=null,je.hoverEvent=null,je.savedMarketKey=n,Bn(),y.innerHTML="""",x.innerHTML="""",je.filteredMarketIndexes=t.markets.map((e,t)=>t),je.marketButtons=Array(t.markets.length).f", %dashboardFile%
+    if ErrorLevel {
+        FileDelete, %dashboardFile%
+        return false
+    }
+
+    FileAppend, % "ill(null),je.marketButtonByKey=new Map,je.sessionEntries=$e(),je.sessionEntries.forEach((e,n)=>{const r=Wt(e.marketKey),i=r>=0?t.markets[r]:null;if(!i)return;const s=i?(i.events||[]).filter(on).length:0,a=document.createElement(""option"");a.value=e.marketKey,a.textContent=function(e,t,n=null){const r=n?(n.events||[]).filter(on).length:0;return``${t+1}. ${e.closeLabel} | ${e.marketKey}${r?`` | ${r} trades``:""""}``}(e,n,i),y.appendChild(a);const o=document.createElement(""button"");o.type=""button"",o.className=""market-button""+(i&&i.complete?"""":"" incomplete""),o.innerHTML=``\n              <span class=""button-main"">\n                <span>${e.closeLabel}</span>\n                <span class=""pill"">${i.complete?""complete"":""partial""}</span>\n              </span>\n              <span class=""button-sub"">${e.marketKey}<br>${i.sampleCount.toLocaleString()} points${s?`` | ${s} events``:""""}</span>\n            ``,o.addEventListener(""click"",()=>{On(e.marketKey,!1)}),x.appendChild(o),je.marketButtonByKey.set(e.marketKey,o),r>=0&&(je.marketButtons[r]=o)}),Fn(),Wn(),document.getElementById(""summaryMarkets"").textContent=ft(t.stats.sharedMarkets),document.getElementById(""summaryComplete"").textContent=ft(t.stats.completeMarkets),document.getElementById(""summarySamples"").textContent=ft(t.stats.totalAlignedSamples),document.getElementById(""summarySkew"").textContent=``${t.alignment.maxSkewSeconds}s``,document.getElementById(""summaryTrades"").textContent=ft(t.stats.totalDrawTradeEvents||0),document.getElementById(""alignmentMethod"").textContent=t.alignment.method,dn(),je.selectedSymbols.length?t.markets.length?Tn(function(){if(je.savedMarketKey){const e=t.markets.findIndex(e=>e.marketKey===je.savedMarketKey);if(e>=0&&je.filteredMarketIndexes.includes(e))return e}return je.filteredMarketIndexes[je.filteredMarketIndexes.length-1]}(),!1):Pn(``No sessions for ${nt()}``):Pn(""Select at least one symbol""),r&&At()}function Dn(e,t){const n=String(e||"""").toUpperCase(),r=je.selectedSymbols.filter(e=>e!==n);if(t){if(r.length>=qe)return void Bn();r.push(n)}je.userSelectedSymbols=!0,je.selectedSymbols=ct(r),An(null)}function Rn(e,t=!0){je.sidePanelCollapsed=e,h.classList.toggle(""side-collapsed"",e),m.classList.toggle(""collapsed"",e),f.textContent=e?""<"":"">"",f.setAttribute(""aria-expanded"",String(!e)),f.setAttribute(""aria-label"",e?""Expand history panel"":""Collapse history panel""),f.title=e?""Expand history panel"":""Collapse history panel"",t&&At(),requestAnimationFrame(ln)}function Fn(){ot(),M.innerHTML="""",w.innerHTML="""";for(const e of je.visibleChartIds)M.appendChild(Kn(e));for(const e of st().filter(e=>!je.visibleChartIds.includes(e)))w.appendChild(Kn(e))}function Kn(e){const t=Ge[e],n=document.createElement(""button"");return n.type=""button"",n.className=""chart-chip"",n.draggable=!0,n.dataset.chartId=e,n.textContent=t.label,n.style.setProperty(""--chip-color"",t.color),Un(n,e),n}function Wn(){N.innerHTML="""";for(const e of Dt()){const t=je.panes[e.paneName];if(!t||t.height<=0)continue;const n=document.createElement(""button"");n.type=""button"",n.className=""pane-handle"",n.draggable=!0,n.dataset.chartId=e.id,n.textContent=e.label,n.title=e.label,n.style.setProperty(""--chip-color"",e.color),n.style.left=""8px"",n.style.top=``${Math.max(6,t.top+8)}px``,Un(n,e.id),N.appendChild(n)}}function Un(e,t){e.addEventListener(""dragstart"",n=>{je.draggingChartId=t,n.dataTransfer.effectAllowed=""move"",n.dataTransfer.setData(""text/plain"",t),requestAnimationFrame(()=>e.classList.add(""dragging""))}),e.addEventListener(""dragend"",()=>{je.draggingChartId=null,je.dropTargetChartId=null,document.querySelectorAll("".chart-chip, .pane-handle, .chart-dropzone"").forEach(e=>{e.classList.remove(""dragging"",""merge-target"",""drag-over"")})}),e.addEventListener(""dragover"",n=>{const r=Hn(n);if(!r||r===t||!at(r))return;n.preventDefault(),n.dataTransfer.dropEffect=""move"";const i=e.closest("".chart-dropzone"")?.dataset.zone;e.classList.toggle(""merge-target"",""hidden""===i||Ft(r,t))}),e.addEventListener(""dragleave"",()=>e.classList.remove(""merge-target"")),e.addEventListener(""drop"",n=>{n.preventDefault(),n.stopPropagation(),e.classList.remove(""merge-target"");const r=Hn(n);if(!r||r===t||!at(r))return;const i=e.closest("".chart-dropzone"")?.dataset.zone;if(""hidden""===i)return Yn(r),void Kt();if(Ft(r,t))!function(e,t){if(!Ft(e,t))return;const n=je.visibleChartIds.includes(t)?je.visibleChartIds.indexOf(t):je.visibleChartIds.includes(e)?je.visibleChartIds.indexOf(e):je.visibleChartIds.length,r=je.visibleChartIds.filter(n=>n!==e&&n!==t&&""pair""!==n);r.splice(Math.max(0,Math.min(r.length,n)),0,""pair""),je.visibleChartIds=r}(r,t);else{const e=je.visibleChartIds.indexOf(t);Gn(r,e<0?je.visibleChartIds.length:e)}Kt()})}function Hn(e){return e.dataTransfer.getData(""text/plain"")||je.draggingChartId}function Gn(e,t=je.visibleChartIds.length){if(!Ge[e]||!at(e))return;const n=je.visibleChartIds.indexOf(e);n>=0&&n<t&&(t-=1);const r=je.visibleChartIds.filter(t=>t!==e),i=Math.max(0,Math.min(r.length,t));r.splice(i,0,e),je.visibleChartIds=r}function Yn(e){je.visibleChartIds.includes(e)&&(Dt().length<=1||(je.visibleChartIds=je.visibleChartIds.filter(t=>t!==e)))}function _n(e,t){e.addEventListener(""dragover"",t=>{const n=Hn(t);n&&at(n)&&(t.preventDefault(),t.dataTransfer.dropEffect=""move"",e.classList.add(""drag-over""))}),e.addEventListener(""dragleave"",()=>e.classList.remove(""drag-over"")),e.addEventListener(""drop"",n=>{n.preventDefault(),e.classList.remove(""drag-over"");const r=Hn(n);r&&at(r)&&(""hidden""===t?Yn(r):Gn(r,function(e){const t=[...M.querySelectorAll("".chart-chip"")];for(let n=0;n<t.length;n+=1){const r=t[n].getBoundingClientRect();if(e.clientX<r.left+r.width/2)return n}return t.length}(n)),Kt())})}function jn(t,n={}){const r=void 0!==n.previousSignature?n.previousSignature:e?e.signature:"""",i=t?t.signature:"""";if(!n.force&&r===i)return!1;const s=void 0!==n.preferredMarketKey?n.preferredMarketKey:Bt()?Bt().marketKey:je.savedMarketKey;return e=t||Ce(""""),ht(),An(s,!n.initial),e.availableSymbols.length||Pn(""Waiting for price data""),!0}func", %dashboardFile%
+    if ErrorLevel {
+        FileDelete, %dashboardFile%
+        return false
+    }
+
+    FileAppend, % "tion Vn(){Ze&&clearTimeout(Ze);const r=async()=>{if(!Qe){Qe=!0;try{t&&t.markets.length&&!Ke()||await async function(t={}){try{if(""sharded""===n)return We(t);const r=e?e.signature:"""";return jn(await Fe({append:!t.initial}),{...t,previousSignature:r})}catch(n){return console.error(n),t.initial&&(e=Ce(""""),je.selectedSymbols=[],An(null,!1),Pn(""Waiting for price-data.jsonl"")),!1}}()}finally{Qe=!1}}Ze=setTimeout(r,1e3)};Ze=setTimeout(r,1e3)}function Jn(){function e(e){je.isDraggingTime&&je.dragPointerId===e.pointerId&&(e.preventDefault(),o.hasPointerCapture(e.pointerId)&&o.releasePointerCapture(e.pointerId),je.isDraggingTime=!1,je.dragPointerId=null,je.dragStartOffset=null,je.dragCurrentOffset=null,En())}y.addEventListener(""change"",()=>{On(y.value)}),v.addEventListener(""click"",()=>$n(-1)),S.addEventListener(""click"",()=>$n(1)),k.addEventListener(""change"",()=>{je.fixedGrid=k.checked,In(),Cn(),At()}),f.addEventListener(""click"",()=>{Rn(!je.sidePanelCollapsed)}),_n(M,""active""),_n(w,""hidden""),document.addEventListener(""keydown"",e=>{""ArrowRight""===e.key?(e.preventDefault(),e.stopPropagation(),$n(1)):""ArrowLeft""===e.key&&(e.preventDefault(),e.stopPropagation(),$n(-1))},{capture:!0}),o.addEventListener(""pointerdown"",e=>{const t=Bt();if(!t||!t.samples.length)return;const n=tn(e);(function(e,t){const n=je.plot;return!!je.visibleChartIds.length&&e>=n.left&&e<=n.left+n.width&&t>=n.chartTop&&t<=n.chartBottom+34})(n.x,n.y)&&(e.preventDefault(),o.setPointerCapture(e.pointerId),je.isDraggingTime=!0,je.dragPointerId=e.pointerId,je.dragStartOffset=nn(n.x),je.dragCurrentOffset=je.dragStartOffset,je.hoverSample=null,je.hoverEvent=null,p.classList.remove(""visible""),En())}),o.addEventListener(""pointermove"",e=>{if(!je.isDraggingTime||je.dragPointerId!==e.pointerId)return;e.preventDefault();const t=tn(e);je.dragCurrentOffset=nn(t.x),En()}),o.addEventListener(""pointerup"",e),o.addEventListener(""pointercancel"",e),o.addEventListener(""dragover"",e=>{Hn(e)&&(e.preventDefault(),e.dataTransfer.dropEffect=""move"")}),o.addEventListener(""drop"",e=>{const t=Hn(e);t&&(e.preventDefault(),Gn(t,function(e){const{y:t}=tn(e),n=Dt();for(let e=0;e<n.length;e+=1){const r=je.panes[n[e].paneName];if(t<r.top+r.height/2)return e}return n.length}(e)),Kt())}),o.addEventListener(""mousemove"",e=>{if(je.isDraggingTime)return;const t=Bt();if(!t||!t.samples.length)return;const{x:n,y:r}=tn(e),i=je.plot;if(n<i.left||n>i.left+i.width||r<i.chartTop||r>i.chartBottom){if(!je.hoverSample&&!je.hoverEvent)return;return je.hoverSample=null,je.hoverEvent=null,p.classList.remove(""visible""),void En()}const s=(n-i.left)/i.width*900,a=function(e,t,n){if(!Rt(""pair"")||je.panes.pair.height<=0)return null;const r=(e.events||[]).filter(on);let i=null,s=1/0;for(const a of r){const r=sn(a,e);if(!Number.isFinite(r))continue;const o=Zt(a.offsetSec),l=Qt(r,""pair""),d=Math.hypot(t-o,n-l);d<s&&d<=13&&(i=a,s=d)}return i}(t,n,r),o=a?null:rn(t,s);(function(e,t){const n=je.hoverEvent?``${je.hoverEvent.type}:${je.hoverEvent.offsetSec}:${je.hoverEvent.pairName||""""}``:"""",r=e?``${e.type}:${e.offsetSec}:${e.pairName||""""}``:"""",i=je.hoverSample?je.hoverSample[_]:null,s=t?t[_]:null;return n===r&&i===s})(a,o)||(je.hoverEvent=a,je.hoverSample=o,En())}),o.addEventListener(""mouseleave"",()=>{je.isDraggingTime||(je.hoverSample||je.hoverEvent)&&(je.hoverSample=null,je.hoverEvent=null,p.classList.remove(""visible""),En())});new ResizeObserver(ln).observe(g)}!async function(){try{const t=await async function(){const t=await Ee();return t&&t.shards.length?(n=""sharded"",r=t,i=new Set,s=new Map,a=new Map,e=ke(),await Pe(t.shards[t.shards.length-1]),e):(n=""legacy"",r=null,i=new Set,s=new Map,a=new Map,Fe({append:!1}))}();e=t,Pt(),jn(t,{initial:!0,force:!0,preferredMarketKey:je.savedMarketKey}),!je.savedMarketKey||Bt()&&Bt().marketKey===je.savedMarketKey||await On(je.savedMarketKey,!1)}catch(t){console.error(t),e=Ce(""""),je.selectedSymbols=[],An(null,!1),Pn(t&&t.message?t.message:""Waiting for price data"")}Jn(),Rn(je.sidePanelCollapsed,!1),ln(),Vn()}()})()</script>", %dashboardFile%
+    if ErrorLevel {
+        FileDelete, %dashboardFile%
+        return false
+    }
+
+    return true
+}
+PriceTrackerEnsureCurrentShard(now := "") {
+    global priceTrackerOutputFile, priceTrackerCurrentShardKey, priceTrackerCurrentShardFile
+
+    shard := PriceTrackerShardInfo(now)
+    if !IsObject(shard) {
+        Log("could not set up data storage")
+        return false
+    }
+
+    shardChanged := (priceTrackerCurrentShardKey != shard.key)
+    priceTrackerCurrentShardKey := shard.key
+    priceTrackerCurrentShardFile := shard.path
+    priceTrackerOutputFile := shard.path
+
+    shardAttributes := FileExist(priceTrackerOutputFile)
+    if (shardAttributes != "" && InStr(shardAttributes, "D")) {
+        Log("could not set up data storage")
+        return false
+    }
+
+    if (shardAttributes = "") {
+        FileAppend,, %priceTrackerOutputFile%
+        if ErrorLevel {
+            Log("could not set up data storage")
+            return false
+        }
+        shardChanged := true
+    }
+
+    if (shardChanged) {
+        if !PriceTrackerWriteDataIndex() {
+            Log("could not set up data storage")
+            return false
+        }
+    }
+    return true
+}
+
+PriceTrackerShardInfo(now := "") {
+    global priceTrackerOutputDir, priceTrackerShardHours
+
+    if (now = "")
+        now := A_Now
+
+    FormatTime, hour24, %now%, H
+    startHour := Floor((hour24 + 0) / priceTrackerShardHours) * priceTrackerShardHours
+    startStamp := SubStr(now, 1, 8) . Format("{:02}", startHour) . "0000"
+    endStamp := startStamp
+    EnvAdd, endStamp, %priceTrackerShardHours%, Hours
+
+    FormatTime, datePart, %startStamp%, yyyy-MM-dd
+    fileName := "price-data-" . datePart . "-" . PriceTrackerShardHourLabel(startStamp) . "-" . PriceTrackerShardHourLabel(endStamp) . ".jsonl"
+    return { "key": startStamp
+        , "fileName": fileName
+        , "path": priceTrackerOutputDir . "\" . fileName
+        , "start": PriceTrackerAhkTimestampLabel(startStamp)
+        , "end": PriceTrackerAhkTimestampLabel(endStamp) }
+}
+
+PriceTrackerShardHourLabel(stamp) {
+    FormatTime, hour12, %stamp%, h
+    FormatTime, ampm, %stamp%, tt
+    StringUpper, ampm, ampm
+    return hour12 . ampm
+}
+
+PriceTrackerAhkTimestampLabel(stamp) {
+    FormatTime, out, %stamp%, yyyy-MM-dd HH:mm:ss
+    return out
+}
+
+PriceTrackerWriteDataIndex() {
+    global priceTrackerOutputDir, priceTrackerDataIndexFile, priceTrackerCurrentShardFile, priceTrackerShardHours
+
+    FormatTime, updatedAt, %A_Now%, yyyy-MM-dd HH:mm:ss
+    json := "{"
+        . """version"":1,"
+        . """shardHours"":" priceTrackerShardHours ","
+        . """updatedAt"":" PriceTrackerJsonString(updatedAt) ","
+        . """shards"":["
+
+    first := true
+    loopPattern := priceTrackerOutputDir . "\price-data-*.jsonl"
+    Loop, Files, %loopPattern%, F
+    {
+        fileName := A_LoopFileName
+        if !RegExMatch(fileName, "^price-data-(\d{4})-(\d{2})-(\d{2})-(\d{1,2})(AM|PM)-(\d{1,2})(AM|PM)\.jsonl$", m)
+            continue
+
+        startHour := PriceTrackerHour12To24(m4, m5)
+        startStamp := m1 . m2 . m3 . Format("{:02}", startHour) . "0000"
+        endStamp := startStamp
+        EnvAdd, endStamp, %priceTrackerShardHours%, Hours
+        FileGetSize, fileSize, %A_LoopFileFullPath%
+        activeText := (A_LoopFileFullPath = priceTrackerCurrentShardFile) ? "true" : "false"
+
+        if (!first)
+            json .= ","
+        first := false
+        json .= "{"
+            . """file"":" PriceTrackerJsonString(fileName) ","
+            . """start"":" PriceTrackerJsonString(PriceTrackerAhkTimestampLabel(startStamp)) ","
+            . """end"":" PriceTrackerJsonString(PriceTrackerAhkTimestampLabel(endStamp)) ","
+            . """bytes"":" (fileSize + 0) ","
+            . """active"":" activeText
+            . "}"
+    }
+
+    json .= "]}"
+    FileDelete, %priceTrackerDataIndexFile%
+    FileAppend, %json%, %priceTrackerDataIndexFile%
+    return !ErrorLevel
+}
+
+PriceTrackerHour12To24(hourValue, ampm) {
+    hour := hourValue + 0
+    StringUpper, ampm, ampm
+    if (ampm = "AM")
+        return (hour = 12) ? 0 : hour
+    return (hour = 12) ? 12 : hour + 12
+}
+
+PriceTrackerWriteRow(assetList) {
+    global priceTrackerOutputFile, priceTrackerHasLoggedFirstWrite
+    if !PriceTrackerEnsureCurrentShard()
+        return false
+
+    assetJson := ""
+
+    for _, asset in assetList {
+        if (assetJson != "")
+            assetJson .= ","
+        assetJson .= PriceTrackerAssetJson(asset)
+    }
+
+    line := PriceTrackerJsonLine(PriceTrackerTimestamp(), assetJson) "`r`n"
+    FileAppend, %line%, %priceTrackerOutputFile%
+
+    if ErrorLevel {
+        Log("could not record data")
+        return false
+    }
+
+    if !priceTrackerHasLoggedFirstWrite {
+        priceTrackerHasLoggedFirstWrite := true
+    }
+    return true
+}
+
+PriceTrackerTimestamp() {
+    FormatTime, out, %A_Now%, yyyy-MM-dd HH:mm:ss
+    return out
+}
+
+PriceTrackerJsonLine(timestamp, assetJson) {
+    json := "{"
+        . """timestamp"":" PriceTrackerJsonString(timestamp) ","
+        . """assets"":[" assetJson "]"
+        . "}"
+    return json
+}
+
+PriceTrackerAssetJson(asset) {
+    StringUpper, assetName, asset
+    snapshot := PriceTrackerGetKalshiMarketSnapshot(asset)
+    priceObj := PriceTrackerGetCachedKalshiPriceObj(asset)
+
+    upPrice := IsObject(snapshot) ? snapshot.up : ""
+    downPrice := IsObject(snapshot) ? snapshot.down : ""
+    underlyingOpen := (IsObject(priceObj) && priceObj.HasKey("open15m") && priceObj.open15m > 0) ? priceObj.open15m : ""
+    underlyingCurrent := (IsObject(priceObj) && priceObj.HasKey("price") && priceObj.price > 0) ? priceObj.price : ""
+    marketName := IsObject(snapshot) ? snapshot.marketTicker : ""
+
+    json := "{"
+        . """assetName"":" PriceTrackerJsonString(assetName) ","
+        . """marketName"":" PriceTrackerJsonString(marketName) ","
+        . """upPrice"":" PriceTrackerJsonNumber(upPrice) ","
+        . """downPrice"":" PriceTrackerJsonNumber(downPrice) ","
+        . """underlyingOpen"":" PriceTrackerJsonNumber(underlyingOpen) ","
+        . """underlyingCurrent"":" PriceTrackerJsonNumber(underlyingCurrent)
+        . "}"
+    return json
+}
+
+PriceTrackerJsonString(value) {
+    quote := Chr(34)
+    if (value = "")
+        return "null"
+
+    value := StrReplace(value, "\", "\\")
+    value := StrReplace(value, quote, "\" quote)
+    value := StrReplace(value, "`r", "\r")
+    value := StrReplace(value, "`n", "\n")
+    value := StrReplace(value, "`t", "\t")
+    return quote . value . quote
+}
+
+PriceTrackerJsonNumber(value) {
+    if (value = "")
+        return "null"
+    return Round(value + 0, 4)
+}
+
+PriceTrackerGetCachedKalshiPriceObj(asset) {
+    global priceTrackerPriceCache, priceTrackerPriceRefreshTick, priceRefreshMs
+    StringUpper, assetKey, asset
+    nowTick := A_TickCount
+
+    if (priceTrackerPriceCache.HasKey(assetKey) && priceTrackerPriceRefreshTick.HasKey(assetKey)) {
+        if ((nowTick - priceTrackerPriceRefreshTick[assetKey]) < priceRefreshMs)
+            return priceTrackerPriceCache[assetKey]
+    }
+
+    priceObj := GetKalshiPrice(assetKey)
+    priceTrackerPriceRefreshTick[assetKey] := nowTick
+
+    if (IsObject(priceObj) && priceObj.HasKey("price") && priceObj.price > 0) {
+        priceTrackerPriceCache[assetKey] := priceObj
+        return priceObj
+    }
+
+    if (priceTrackerPriceCache.HasKey(assetKey))
+        return priceTrackerPriceCache[assetKey]
+    return ""
+}
+
+PriceTrackerGetKalshiMarketSnapshot(asset, maxRetries := 4) {
+    global priceTrackerAssetSeriesMap, priceTrackerSnapshotCache, priceTrackerMarketRefreshTick, marketRefreshMs
+    StringUpper, assetKey, asset
+    if !priceTrackerAssetSeriesMap.HasKey(assetKey)
+        return false
+
+    series := priceTrackerAssetSeriesMap[assetKey]
+    nowTick := A_TickCount
+
+    if (priceTrackerSnapshotCache.HasKey(assetKey) && priceTrackerMarketRefreshTick.HasKey(assetKey)) {
+        cached := priceTrackerSnapshotCache[assetKey]
+        if (IsObject(cached) && (nowTick - priceTrackerMarketRefreshTick[assetKey]) < marketRefreshMs) {
+            PriceTrackerRefreshKalshiBestAsks(cached)
+            return cached
+        }
+    }
+
+    attempt := 1
+    while (attempt <= maxRetries) {
+        url := "https://api.elections.kalshi.com/trade-api/v2/markets?series_ticker=" series "&status=open&limit=1&_=" A_TickCount "-" attempt
+        body := HttpGet(url)
+
+        if (body != "") {
+            marketTicker := PriceTrackerFirstJsonField(body, ["ticker"])
+            yesPrice := PriceTrackerKalshiDollarPrice(body, "yes_ask_dollars", "yes_ask")
+            noPrice := PriceTrackerKalshiDollarPrice(body, "no_ask_dollars", "no_ask")
+            closeIso := PriceTrackerFirstJsonField(body, ["close_time", "expected_expiration_time", "expiration_time", "settlement_time"])
+            minsLeft := PriceTrackerMinutesUntilIsoUtc(closeIso)
+
+            if (minsLeft != "" && minsLeft < 0.5) {
+                if (attempt < maxRetries) {
+                    Sleep 200
+                    attempt++
+                    continue
+                }
+            }
+
+            if (marketTicker != "") {
+                obj := {}
+                obj.up := (yesPrice != "") ? yesPrice + 0 : ""
+                obj.down := (noPrice != "") ? noPrice + 0 : ""
+                obj.minutesLeft := minsLeft
+                obj.closeTime := closeIso
+                obj.marketTicker := marketTicker
+
+                priceTrackerSnapshotCache[assetKey] := obj
+                priceTrackerMarketRefreshTick[assetKey] := nowTick
+                PriceTrackerRefreshKalshiBestAsks(obj)
+                return obj
+            }
+        }
+
+        if (attempt < maxRetries)
+            Sleep 200
+        attempt++
+    }
+
+    if (priceTrackerSnapshotCache.HasKey(assetKey)) {
+        cached := priceTrackerSnapshotCache[assetKey]
+        if IsObject(cached) {
+            PriceTrackerRefreshKalshiBestAsks(cached)
+            return cached
+        }
+    }
+    return false
+}
+
+PriceTrackerRefreshKalshiBestAsks(snapshot) {
+    if !IsObject(snapshot) || snapshot.marketTicker = ""
+        return false
+
+    url := "https://api.elections.kalshi.com/trade-api/v2/markets/" snapshot.marketTicker "/orderbook?depth=1&_=" A_TickCount
+    body := HttpGet(url)
+    if (body = "")
+        return false
+
+    yesBid := PriceTrackerOrderbookBestBid(body, "yes_dollars")
+    noBid := PriceTrackerOrderbookBestBid(body, "no_dollars")
+    updated := false
+
+    if (noBid != "") {
+        snapshot.up := Round(1 - (noBid + 0), 4)
+        updated := true
+    }
+    if (yesBid != "") {
+        snapshot.down := Round(1 - (yesBid + 0), 4)
+        updated := true
+    }
+
+    return updated
+}
+
+PriceTrackerOrderbookBestBid(json, sideField) {
+    pattern := """" sideField """\s*:\s*\[\s*\[\s*""?(-?\d+(?:\.\d+)?)"
+    if RegExMatch(json, pattern, m)
+        return m1
+    return ""
+}
+
+PriceTrackerKalshiDollarPrice(json, dollarField, centsField := "") {
+    val := PriceTrackerFirstJsonField(json, [dollarField])
+    if (val != "")
+        return val
+
+    if (centsField != "") {
+        val := PriceTrackerFirstJsonField(json, [centsField])
+        if (val != "" && PriceTrackerIsNumeric(val))
+            return (val + 0) / 100.0
+    }
+
+    return ""
+}
+
+PriceTrackerFirstJsonField(json, fields, skipZero := false) {
+    for _, field in fields {
+        val := PriceTrackerJsonField(json, field)
+        if (val != "") {
+            if (skipZero && PriceTrackerIsNumeric(val) && (val + 0) = 0)
+                continue
+            return val
+        }
+    }
+    return ""
+}
+
+PriceTrackerJsonField(json, field) {
+    pattern := """" field """\s*:\s*(""([^""]*)""|[^,}\s][^,}\r\n]*)"
+    result := ""
+    pos := 1
+    while (pos := RegExMatch(json, pattern, m, pos)) {
+        val := Trim(m1)
+        val := Trim(val, """")
+        if (val != "")
+            result := val
+        pos += StrLen(m)
+    }
+    return result
+}
+
+PriceTrackerIsNumeric(value) {
+    value := Trim(value)
+    return RegExMatch(value, "^-?\d+(\.\d+)?$")
+}
+
+PriceTrackerMinutesUntilIsoUtc(iso) {
+    ts := PriceTrackerIsoUtcToAhk(iso)
+    if (ts = "")
+        return ""
+
+    nowUtc := A_NowUTC
+    if (nowUtc = "")
+        return ""
+
+    diff := ts
+    EnvSub, diff, %nowUtc%, Seconds
+    return diff / 60.0
+}
+
+PriceTrackerIsoUtcToAhk(iso) {
+    if (iso = "")
+        return ""
+    if !RegExMatch(iso, "O)^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})", m)
+        return ""
+    return m1 m2 m3 m4 m5 m6
+}
+
 ```
-
----
-

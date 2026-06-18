@@ -63,7 +63,7 @@ const config = {
           createSitemapItems: async (params) => {
             const items = await params.defaultCreateSitemapItems(params);
             const videoPagePattern =
-              /^\/docs\/youtube-code\/video-(?:[1-9]|1[01])-[^/]+\/$/;
+              /^\/docs\/youtube-code\/video-(?:[1-9]|1[0-2])-[^/]+\/$/;
 
             const prioritizedItems = items.map((item) => {
               const pathname = new URL(item.url).pathname;

@@ -38,6 +38,7 @@ const sidebars = {
         'youtube-code/video-9/video-9-kalshi-v3',
         'youtube-code/video-10/video-10-kalshi-v4',
         'youtube-code/video-11/video-11-kalshi-arbitrage',
+        'youtube-code/video-12/video-12-kalshi-backtesting',
       ],
       collapsible: true,
       collapsed: false,
