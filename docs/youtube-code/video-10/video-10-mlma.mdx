@@ -184,12 +184,12 @@ loop {
                         break
                     }
                     if (A_Index < 4) {
-                        Log(asset " Sell retry " A_Index "/3")
+                        Log(asset " Exit retry " A_Index "/3 | " KalshiLastOrderApiSummary())
                         Sleep 1000
                     }
                 }
                 if (!sellConfirmed)
-                    Log(asset " SELL FAILED after 4 retries")
+                    Log(asset " Exit order failed after 4 attempts | " KalshiLastOrderApiSummary())
                 positions.Delete(asset)
                 assetPhase[asset] := "STOPPED_OUT"
                 LogOnce(asset, "STOPPED_OUT", asset " Stopped out, waiting for next session")
@@ -287,7 +287,7 @@ loop {
                 break
             }
             if (A_Index < 4) {
-                Log(asset " Retry " A_Index "/3")
+                Log(asset " Entry retry " A_Index "/3 | " KalshiLastOrderApiSummary())
                 Sleep 1000
             }
         }
@@ -299,7 +299,7 @@ loop {
             Log(asset " Monitoring stop-loss @ " Fmt(Exit))
         } else {
             assetPhase[asset] := "BUY_FAILED"
-            Log(asset " Order not filled after 4 attempts, skipping session")
+            Log(asset " Entry order not filled after 4 attempts, skipping session | " KalshiLastOrderApiSummary())
         }
     }
 
@@ -458,59 +458,85 @@ HasExistingPosition(marketTicker) {
 }
 
 PlaceKalshiOrder(action, marketTicker, side, price, size, clientOrderId := "") {
-    global enableLiveOrders, kalshiApiKeyId, kalshiPrivateKeyPath, restDelay, entryDiff, exitDiff
-    if (!enableLiveOrders)
+    global enableLiveOrders, kalshiApiKeyId, kalshiPrivateKeyPath, restDelay, entryDiff, exitDiff, kalshiLastOrderResult
+    kalshiLastOrderResult := { action: action, ticker: marketTicker, side: side, apiAction: "", apiSide: "", cents: "", price: "", contractCents: "", timeInForce: "", size: size, status: "", body: "", orderId: "", clientOrderId: clientOrderId, reason: "not submitted" }
+
+    if (!enableLiveOrders) {
+        kalshiLastOrderResult.reason := "live orders disabled"
         return true
+    }
 
-    if (kalshiApiKeyId = "" || kalshiPrivateKeyPath = "")
-        return false
-
-    if (marketTicker = "")
-        return false
-
-    isBuy := (ToLower(action) = "buy")
-    if (isBuy)
-        price := price + entryDiff
-    else
-        price := 0.01  ; IoC+reduce_only: sell at any price, exchange fills at best bid
-    apiAction := ToLower(action)
-    apiSide := (side = "UP") ? "yes" : "no"
-    cents := Round(price * 100)
-    if (cents < 1)
-        cents := 1
-    else if (cents > 99)
-        cents := 99
-
-    priceField := (apiSide = "yes") ? "yes_price" : "no_price"
-    reduceOnly := isBuy ? "" : """reduce_only"":true,""time_in_force"":""immediate_or_cancel"","
-    if (clientOrderId = "")
-        clientOrderId := BuildClientOrderId(marketTicker, apiAction, apiSide)
-
-    payload := "{"
-        . """ticker"":""" marketTicker ""","
-        . """action"":""" apiAction ""","
-        . """side"":""" apiSide ""","
-        . """count"":" size ","
-        . """type"":""limit"","
-        . """" priceField """:" cents ","
-        . reduceOnly
-        . """client_order_id"":""" clientOrderId """"
-        . "}"
-
-    res := KalshiSignedRequest("POST", "/trade-api/v2/portfolio/orders", payload)
-    if !IsObject(res)
-        return false
-
-    orderId := JsonField(res.body, "order_id")
-
-
-    if (res.status = 401 || res.status = 403) {
-        Log("WARN: HTTP " res.status " on order submit, will retry")
+    if (kalshiApiKeyId = "" || kalshiPrivateKeyPath = "") {
+        kalshiLastOrderResult.reason := "missing API credentials"
         return false
     }
 
-    if (res.status != 201 && res.status != 200)
+    if (marketTicker = "") {
+        kalshiLastOrderResult.reason := "missing market ticker"
         return false
+    }
+
+    isBuy := (ToLower(action) = "buy")
+    contractPrice := price + 0
+    if (isBuy)
+        contractPrice := contractPrice + entryDiff
+    else
+        contractPrice := 0.01  ; IoC+reduce_only: sell at any price, exchange fills at best bid
+    contractCents := KalshiClampCents(Round(contractPrice * 100))
+    apiAction := ToLower(action)
+    apiSide := KalshiEventOrderSide(apiAction, side)
+    apiCents := KalshiEventOrderCents(apiAction, side, contractCents)
+    priceText := KalshiFixedPriceFromCents(apiCents)
+    countText := KalshiFixedCount(size)
+    timeInForce := isBuy ? "good_till_canceled" : "immediate_or_cancel"
+    reduceOnly := isBuy ? "false" : "true"
+    if (clientOrderId = "")
+        clientOrderId := BuildClientOrderId(marketTicker, apiAction, apiSide)
+    kalshiLastOrderResult.apiAction := apiAction
+    kalshiLastOrderResult.apiSide := apiSide
+    kalshiLastOrderResult.cents := apiCents
+    kalshiLastOrderResult.price := priceText
+    kalshiLastOrderResult.contractCents := contractCents
+    kalshiLastOrderResult.timeInForce := timeInForce
+    kalshiLastOrderResult.clientOrderId := clientOrderId
+
+    payload := "{"
+        . """ticker"":""" marketTicker ""","
+        . """side"":""" apiSide ""","
+        . """count"":""" countText ""","
+        . """price"":""" priceText ""","
+        . """time_in_force"":""" timeInForce ""","
+        . """self_trade_prevention_type"":""taker_at_cross"","
+        . """post_only"":false,"
+        . """cancel_order_on_pause"":false,"
+        . """reduce_only"":" reduceOnly ","
+        . """client_order_id"":""" clientOrderId """"
+        . "}"
+
+    res := KalshiSignedRequest("POST", "/trade-api/v2/portfolio/events/orders", payload)
+    if !IsObject(res) {
+        kalshiLastOrderResult.reason := "signed request failed or no API response"
+        return false
+    }
+
+    kalshiLastOrderResult.status := res.status
+    kalshiLastOrderResult.body := res.body
+
+    orderId := JsonField(res.body, "order_id")
+    kalshiLastOrderResult.orderId := orderId
+
+
+    if (res.status = 401 || res.status = 403) {
+        kalshiLastOrderResult.reason := "auth rejected"
+        return false
+    }
+
+    if (res.status != 201 && res.status != 200) {
+        kalshiLastOrderResult.reason := "order rejected"
+        return false
+    }
+
+    kalshiLastOrderResult.reason := "order accepted"
 
     if (isBuy)
         Sleep %restDelay%
@@ -518,22 +544,185 @@ PlaceKalshiOrder(action, marketTicker, side, price, size, clientOrderId := "") {
         Sleep 150
 
     hasPos := HasExistingPosition(marketTicker)
+    kalshiLastOrderResult.positionOpen := hasPos ? "yes" : "no"
 
     if (isBuy && !hasPos && orderId != "") {
+        kalshiLastOrderResult.reason := "not filled; canceling resting order"
         CancelKalshiOrder(orderId)
         Sleep 500
         hasPos := HasExistingPosition(marketTicker)
+        kalshiLastOrderResult.positionOpen := hasPos ? "yes" : "no"
         if (hasPos)
+        {
+            kalshiLastOrderResult.reason := "filled during cancel race"
             Log(marketTicker " Order filled during cancel race, treating as confirmed")
+        }
+        else
+            kalshiLastOrderResult.reason := "not filled; canceled resting order"
+    }
+
+    if (isBuy) {
+        if (hasPos && kalshiLastOrderResult.reason = "order accepted")
+            kalshiLastOrderResult.reason := "position confirmed"
+        else if (!hasPos && kalshiLastOrderResult.reason = "order accepted")
+            kalshiLastOrderResult.reason := "position not confirmed"
+    } else {
+        if (hasPos)
+            kalshiLastOrderResult.reason := "position still open after IoC sell"
+        else
+            kalshiLastOrderResult.reason := "position closed"
     }
 
     return (isBuy ? hasPos : !hasPos)
 }
 
+KalshiEventOrderSide(apiAction, contractSide) {
+    ; V2 quotes everything from the YES book: bid=buy YES, ask=sell YES.
+    if (apiAction = "buy")
+        return (contractSide = "UP") ? "bid" : "ask"
+    return (contractSide = "UP") ? "ask" : "bid"
+}
+
+KalshiEventOrderCents(apiAction, contractSide, contractCents) {
+    contractCents := KalshiClampCents(contractCents)
+    if (contractSide = "UP")
+        return contractCents
+    return KalshiClampCents(100 - contractCents)
+}
+
+KalshiClampCents(cents) {
+    cents := Round(cents + 0)
+    if (cents < 1)
+        return 1
+    if (cents > 99)
+        return 99
+    return cents
+}
+
+KalshiFixedPriceFromCents(cents) {
+    cents := KalshiClampCents(cents)
+    return "0." KalshiPad2(cents) "00"
+}
+
+KalshiFixedCount(size) {
+    countCents := Round((size + 0) * 100)
+    whole := Floor(countCents / 100)
+    frac := Mod(countCents, 100)
+    return whole "." KalshiPad2(frac)
+}
+
+KalshiPad2(n) {
+    n := Round(n + 0)
+    if (n < 10)
+        return "0" n
+    return n
+}
+
+KalshiLastOrderApiSummary() {
+    global kalshiLastOrderResult
+    if !IsObject(kalshiLastOrderResult)
+        return "API no order attempt recorded"
+
+    action := KalshiResultValue(kalshiLastOrderResult, "action", "ORDER")
+    side := KalshiResultValue(kalshiLastOrderResult, "side", "")
+    apiSide := KalshiResultValue(kalshiLastOrderResult, "apiSide", "")
+    ticker := KalshiResultValue(kalshiLastOrderResult, "ticker", "")
+    cents := KalshiResultValue(kalshiLastOrderResult, "cents", "")
+    price := KalshiResultValue(kalshiLastOrderResult, "price", "")
+    contractCents := KalshiResultValue(kalshiLastOrderResult, "contractCents", "")
+    timeInForce := KalshiResultValue(kalshiLastOrderResult, "timeInForce", "")
+    size := KalshiResultValue(kalshiLastOrderResult, "size", "")
+    status := KalshiResultValue(kalshiLastOrderResult, "status", "")
+    body := KalshiResultValue(kalshiLastOrderResult, "body", "")
+    orderId := KalshiResultValue(kalshiLastOrderResult, "orderId", "")
+    clientOrderId := KalshiResultValue(kalshiLastOrderResult, "clientOrderId", "")
+    reason := KalshiResultValue(kalshiLastOrderResult, "reason", "")
+
+    orderText := action
+    if (side != "")
+        orderText .= " " side
+    if (apiSide != "")
+        orderText .= " -> " apiSide
+    if (ticker != "")
+        orderText .= " " ticker
+    if (price != "")
+        orderText .= " @" price
+    else if (cents != "")
+        orderText .= " @" cents "c"
+    if (size != "")
+        orderText .= " x" size
+    if (timeInForce != "")
+        orderText .= " " timeInForce
+    if (contractCents != "" && contractCents != cents)
+        orderText .= " contract@" contractCents "c"
+
+    if (status = "")
+        apiText := "API no response"
+    else
+        apiText := "API HTTP " status
+
+    includeBody := (status != 200 && status != 201)
+    apiMessage := KalshiApiMessage(body, includeBody)
+    if (apiMessage != "")
+        apiText .= " " apiMessage
+    if (orderId != "")
+        apiText .= " order_id=" KalshiShortLogText(orderId, 28)
+    if (reason != "")
+        apiText .= " | " reason
+    if (clientOrderId != "")
+        apiText .= " | cid=" KalshiShortLogText(clientOrderId, 36)
+
+    return orderText " | " apiText
+}
+
+KalshiApiMessage(body, includeBodyFallback := true) {
+    body := Trim(body)
+    if (body = "")
+        return ""
+
+    code := JsonField(body, "code")
+    message := JsonField(body, "message")
+    detail := JsonField(body, "detail")
+    errorText := JsonField(body, "error")
+
+    if (code != "" && message != "")
+        return "code=" KalshiCompactLogText(code, 40) " msg=" KalshiCompactLogText(message, 140)
+    if (message != "")
+        return "msg=" KalshiCompactLogText(message, 160)
+    if (detail != "")
+        return "detail=" KalshiCompactLogText(detail, 160)
+    if (errorText != "")
+        return "error=" KalshiCompactLogText(errorText, 160)
+    if (includeBodyFallback)
+        return "body=" KalshiCompactLogText(body, 180)
+    return ""
+}
+
+KalshiResultValue(result, key, fallback := "") {
+    if IsObject(result) && result.HasKey(key)
+        return result[key]
+    return fallback
+}
+
+KalshiShortLogText(s, maxLen := 36) {
+    return KalshiCompactLogText(s, maxLen)
+}
+
+KalshiCompactLogText(s, maxLen := 160) {
+    s := Trim(JsonUnescape(s))
+    s := StrReplace(s, "`r", " ")
+    s := StrReplace(s, "`n", " ")
+    s := StrReplace(s, A_Tab, " ")
+    s := RegExReplace(s, "\s+", " ")
+    if (StrLen(s) > maxLen)
+        return SubStr(s, 1, maxLen - 3) "..."
+    return s
+}
+
 CancelKalshiOrder(orderId) {
     if (orderId = "")
         return
-    KalshiSignedRequest("DELETE", "/trade-api/v2/portfolio/orders/" orderId)
+    KalshiSignedRequest("DELETE", "/trade-api/v2/portfolio/events/orders/" orderId)
 }
 
 LoadKalshiCredentialsFromFiles() {
@@ -1013,5 +1202,6 @@ IsoUtcToAhk(iso) {
         return ""
     return m1 m2 m3 m4 m5 m6
 }
+
 
 ```
