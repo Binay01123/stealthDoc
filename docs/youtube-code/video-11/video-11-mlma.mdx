@@ -3418,24 +3418,12 @@ BuildKalshiOrderJson(action, marketTicker, side, price, size, clientOrderId := "
         return ""
     if (isBuy)
         price := price + entryDiff
-    size := Round(size + 0, 2)
-    if (size < 1)
-        size := 1
 
-    outcomePrice := price + 0
-    if (outcomePrice < 0.01)
-        outcomePrice := 0.01
-    else if (outcomePrice > 0.99)
-        outcomePrice := 0.99
-
-    ; Event-order V2 quotes the YES book. A DOWN price must be complemented.
-    bookPrice := (side = "UP") ? outcomePrice : (1 - outcomePrice)
-    bookPrice := Round(bookPrice, 4)
-    bookSide := ""
-    if (isBuy)
-        bookSide := (side = "UP") ? "bid" : "ask"
-    else
-        bookSide := (side = "UP") ? "ask" : "bid"
+    outcomePrice := KalshiClampPrice(price)
+    bookPrice := KalshiEventOrderPrice(side, outcomePrice)
+    bookSide := KalshiEventOrderSide(apiAction, side)
+    countText := KalshiFixedCount(size)
+    priceText := KalshiFixedPrice(bookPrice)
 
     timeInForce := isBuy ? "good_till_canceled" : "immediate_or_cancel"
     reduceOnly := isBuy ? "false" : "true"
@@ -3446,13 +3434,60 @@ BuildKalshiOrderJson(action, marketTicker, side, price, size, clientOrderId := "
         . """ticker"":""" marketTicker ""","
         . """client_order_id"":""" clientOrderId ""","
         . """side"":""" bookSide ""","
-        . """count"":""" size ""","
-        . """price"":""" bookPrice ""","
+        . """count"":""" countText ""","
+        . """price"":""" priceText ""","
         . """time_in_force"":""" timeInForce ""","
         . """self_trade_prevention_type"":""taker_at_cross"","
+        . """post_only"":false,"
         . """cancel_order_on_pause"":true,"
         . """reduce_only"":" reduceOnly
         . "}"
+}
+
+KalshiEventOrderSide(apiAction, contractSide) {
+    ; Event-order V2 quotes the YES book: bid=buy YES, ask=sell YES.
+    if (apiAction = "buy")
+        return (contractSide = "UP") ? "bid" : "ask"
+    return (contractSide = "UP") ? "ask" : "bid"
+}
+
+KalshiEventOrderPrice(contractSide, outcomePrice) {
+    outcomePrice := KalshiClampPrice(outcomePrice)
+    if (contractSide = "UP")
+        return outcomePrice
+    return KalshiClampPrice(1 - outcomePrice)
+}
+
+KalshiClampPrice(price) {
+    price := price + 0
+    if (price < 0.01)
+        return 0.01
+    if (price > 0.99)
+        return 0.99
+    return price
+}
+
+KalshiFixedPrice(price) {
+    priceUnits := Round(KalshiClampPrice(price) * 10000)
+    whole := Floor(priceUnits / 10000)
+    frac := Mod(priceUnits, 10000)
+    return whole "." KalshiPadLeft(frac, 4)
+}
+
+KalshiFixedCount(size) {
+    countUnits := Round((size + 0) * 100)
+    if (countUnits < 100)
+        countUnits := 100
+    whole := Floor(countUnits / 100)
+    frac := Mod(countUnits, 100)
+    return whole "." KalshiPadLeft(frac, 2)
+}
+
+KalshiPadLeft(value, width) {
+    text := Round(value + 0)
+    while (StrLen(text) < width)
+        text := "0" text
+    return text
 }
 
 SubmitKalshiIndividualOrders(action, legs, overridePrice := "", skipExisting := true) {
@@ -4059,5 +4094,6 @@ IsoUtcToAhk(iso) {
         return ""
     return m1 m2 m3 m4 m5 m6
 }
+
 
 ```
