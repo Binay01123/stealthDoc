@@ -40,8 +40,9 @@ This backtesting and session review workflow is especially important for the ear
 ; =========================
 ; Price Tracker Configuration
 ; =========================
-assets := ["BTC", "ETH" , "SOL"]
-; Its optimal to track max 3 at a time although all 7 assets at once is possible.
+assets := ["BTC", "ETH", "SOL"]
+
+; You can add all 7 assets symbol. although three at a time is optimal
 
 ; 15-minute Kalshi crypto series only.
 priceTrackerAssetSeriesMap := { "BTC": "KXBTC15M", "ETH": "KXETH15M", "SOL": "KXSOL15M", "XRP": "KXXRP15M", "DOGE": "KXDOGE15M", "HYPE": "KXHYPE15M", "BNB": "KXBNB15M" }
@@ -49,12 +50,12 @@ priceTrackerSnapshotCache := {}
 priceTrackerMarketRefreshTick := {}
 priceTrackerPriceCache := {}
 priceTrackerPriceRefreshTick := {}
-priceTrackerOutputDir := A_WorkingDir "\Training-Data"
+priceTrackerOutputDir := A_ScriptDir "\Training-Data"
 priceTrackerDashboardFile := priceTrackerOutputDir "\dashboard.html"
 priceTrackerOutputFile := ""
 priceTrackerDataIndexFile := priceTrackerOutputDir "\price-data-index.json"
 priceTrackerServerFile := priceTrackerOutputDir "\server.ps1"
-priceTrackerServerPort := 8788
+priceTrackerServerPort := 8765
 priceTrackerDashboardUrl := "http://127.0.0.1:" priceTrackerServerPort "/dashboard.html"
 priceTrackerOpenDashboardOnStart := true
 priceTrackerHasLoggedFirstWrite := false
@@ -951,6 +952,17 @@ PriceTrackerPowerShellArgumentList(args*) {
 }
 
 PriceTrackerWriteEmbeddedDashboard(dashboardFile) {
+    sourceDashboardFile := A_ScriptDir "\dashboard.html"
+    if (FileExist(sourceDashboardFile) && sourceDashboardFile != dashboardFile) {
+        FileRead, dashboardHtml, %sourceDashboardFile%
+        if (!ErrorLevel && dashboardHtml != "") {
+            FileDelete, %dashboardFile%
+            FileAppend, %dashboardHtml%, %dashboardFile%
+            if !ErrorLevel
+                return true
+        }
+    }
+
     FileDelete, %dashboardFile%
 
     FileAppend, % "<!doctype html><html lang=""en""><meta charset=""utf-8""><meta name=""viewport"" content=""width=device-width,initial-scale=1""><title>Crypto Price History</title><style>:root{color-scheme:dark;--bg:#000000;--panel:#050805;--panel-2:#090d08;--border:#2b3528;--grid:rgba(240, 255, 235, 0.13);--axis:rgba(236, 236, 228, 0.72);--text:#efefe8;--muted:#b9beb1;--muted-2:#858d7b;--green:#00e060;--green-soft:rgba(0, 224, 96, 0.18);--red:#ff003d;--red-soft:rgba(255, 0, 61, 0.2);--amber:#ffcc00;--btc:#ff8a00;--eth:#008cff;--sync:#00ff66;--delay:#ffcc00;--unstable:#ff6a00;--divergence:#ff003d;--blue:#008cff;--shadow:rgba(0, 0, 0, 0.34)}*{box-sizing:border-box}body,html{min-height:100%}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,""Segoe UI"",sans-serif;letter-spacing:0}button,select{font:inherit}.shell{width:min(1520px,calc(100vw - 32px));margin:0 auto;padding:20px 0 28px}.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px}h1{margin:0;font-size:clamp(21px, 2vw, 30px);font-weight:760;letter-spacing:0}.controls{display:flex;align-items:center;gap:8px;min-width:min(100%,620px)}.icon-button,select{border:1px solid var(--border);background:var(--panel-2);color:var(--text);height:38px}select{flex:0 0 auto;border-radius:7px;padding:0 12px;outline:0}#marketSelect{flex:1 1 360px;width:min(520px,100%)}.icon-button{width:40px;border-radius:7px;display:inline-grid;place-items:center;cursor:pointer;font-size:20px;line-height:1}.icon-button:hover,.market-button:hover,select:hover{border-color:rgba(239,239,232,.52)}.chart-chip:focus-visible,.grid-toggle input:focus-visible,.icon-button:focus-visible,.market-button:focus-visible,.side-toggle:focus-visible,select:focus-visible{outline:2px solid var(--blue);outline-offset:2px}.grid-toggle{height:38px;display:inline-flex;align-items:center;gap:8px;padding:0 11px;border:1px solid var(--border);border-radius:7px;background:var(--panel-2);color:var(--text);cursor:pointer;font-size:13px;flex:0 0 auto;white-space:nowrap}.grid-toggle:hover{border-color:rgba(239,239,232,.52)}.grid-toggle input{width:15px;height:15px;accent-color:var(--green);cursor:pointer}.workspace{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:14px;align-items:stretch;transition:grid-template-columns 160ms ease}.workspace.side-collapsed{grid-template-columns:minmax(0,1fr) 46px}.chart-panel,.metric,.side-panel{border:1px solid var(--border);background:var(--panel);border-radius:8px;box-shadow:0 12px 28px var(--shadow)}.chart-panel{--section-color:var(--green);position:relative;min-width:0;padding:14px}.chart-panel::after,.market-button::after,.metric::after,.side-panel::after,.summary-item::after{content:"""";position:absolute;top:9px;right:9px;width:11px;height:11px;border:2px solid #efefe8;border-radius:999px;background:var(--section-color,var(--green));box-shadow:0 0 0 2px rgba(0,0,0,.82),0 0 14px color-mix(in srgb,var(--section-color,var(--green)) 76%,transparent);pointer-events:none}.chart-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:12px}.market-title{min-width:0}.market-title strong{display:block;font-size:17px;font-weight:760;line-height:1.25}.market-title span{display:block;margin-top:4px;color:var(--muted);font-size:12px;overflow-wrap:anywhere}.symbol-selector{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:8px 10px;min-width:min(100%,420px)}.symbol-option{display:inline-flex;align-items:center;gap:7px;border:1px solid rgba(239,239,232,.2);border-radius:7px;background:rgba(9,13,8,.82);color:var(--muted);min-height:34px;padding:0 10px;cursor:pointer;font-size:13px;font-weight:750;user-select:none}.symbol-option.checked{border-color:var(--green);color:var(--text);box-shadow:0 0 16px rgba(0,224,96,.12)}.symbol-option.disabled{opacity:.48;cursor:not-allowed}.symbol-option input{width:16px;height:16px;accent-color:var(--green);cursor:inherit}.symbol-option input:focus-visible{outline:2px solid var(--blue);outline-offset:2px}.chart-controls{display:grid;grid-template-columns:minmax(0,1fr) minmax(220px,0.42fr);gap:10px;margin:0 0 12px}.chart-dropzone{min-height:44px;display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:8px;border:1px dashed rgba(236,236,228,.22);border-radius:8px;background:rgba(9,13,8,.84)}.chart-dropzone::before{content:attr(data-label);flex:0 0 auto;color:var(--muted-2);font-size:11px;font-weight:760;letter-spacing:.04em;text-transform:uppercase}.chart-dropzone.drag-over{border-color:var(--amber);background:rgba(217,179,109,.09)}.chart-chip{display:inline-flex;align-items:center;gap:7px;min-height:28px;padding:0 10px;border:1px solid rgba(236,236,228,.22);border-radius:7px;background:#080d07;color:var(--text);cursor:grab;font-size:12px;font-weight:700;user-select:none}.chart-chip::before{content:"""";width:9px;height:9px;border-radius:999px;background:var(--chip-color,var(--muted));box-shadow:0 0 0 3px rgba(255,255,255,.04)}.chart-chip:active{cursor:grabbing}.chart-chip.dragging{opacity:.48}.chart-chip.merge-target{border-color:var(--amber);box-shadow:0 0 0 2px rgba(217,179,109,.16)}.chart-wrap{position:relative;height:min(90vh,1040px);min-height:760px;border:1px solid rgba(236,236,228,.16);border-radius:8px;background:#000;overflow:hidden}.pane-handles{position:absolute;inset:0;z-index:4;pointer-events:none}.pane-handle{position:absolute;display:inline-flex;align-items:center;justify-content:center;gap:0;height:28px;width:28px;min-width:28px;padding:0;border:1px solid rgba(236,236,228,.22);border-radius:7px;background:rgba(5,8,5,.9);color:var(--text);cursor:grab;font-size:0;font-weight:760;line-height:1;overflow:hidden;user-select:none;pointer-events:auto;backdrop-filter:blur(6px)}.pane-handle::before{content:"""";flex:0 0 auto;width:9px;height:9px;border-radius:999px;background:var(--chip-color,var(--muted));box-shadow:0 0 0 3px rgba(255,255,255,.04)}.pane-handle:active{cur", %dashboardFile%
@@ -1160,6 +1172,9 @@ PriceTrackerWriteRow(assetList) {
     if !PriceTrackerEnsureCurrentShard()
         return false
 
+    utcStamp := A_NowUTC
+    timestamp := PriceTrackerEasternTimestampFromUtc(utcStamp)
+    timestampUtc := PriceTrackerUtcIsoLabel(utcStamp)
     assetJson := ""
 
     for _, asset in assetList {
@@ -1168,7 +1183,7 @@ PriceTrackerWriteRow(assetList) {
         assetJson .= PriceTrackerAssetJson(asset)
     }
 
-    line := PriceTrackerJsonLine(PriceTrackerTimestamp(), assetJson) "`r`n"
+    line := PriceTrackerJsonLine(timestamp, timestampUtc, assetJson) "`r`n"
     FileAppend, %line%, %priceTrackerOutputFile%
 
     if ErrorLevel {
@@ -1182,14 +1197,43 @@ PriceTrackerWriteRow(assetList) {
     return true
 }
 
-PriceTrackerTimestamp() {
-    FormatTime, out, %A_Now%, yyyy-MM-dd HH:mm:ss
+PriceTrackerEasternTimestampFromUtc(utcStamp) {
+    easternStamp := utcStamp
+    offsetHours := PriceTrackerEasternUtcOffsetHours(utcStamp)
+    EnvAdd, easternStamp, %offsetHours%, Hours
+    FormatTime, out, %easternStamp%, yyyy-MM-dd HH:mm:ss
     return out
 }
 
-PriceTrackerJsonLine(timestamp, assetJson) {
+PriceTrackerUtcIsoLabel(stamp) {
+    FormatTime, datePart, %stamp%, yyyy-MM-dd
+    FormatTime, timePart, %stamp%, HH:mm:ss
+    return datePart "T" timePart "Z"
+}
+
+PriceTrackerEasternUtcOffsetHours(utcStamp) {
+    FormatTime, year, %utcStamp%, yyyy
+    dstStartDay := PriceTrackerNthSundayDay(year, 3, 2)
+    dstEndDay := PriceTrackerNthSundayDay(year, 11, 1)
+    dstStartUtc := year "03" Format("{:02}", dstStartDay) "070000"
+    dstEndUtc := year "11" Format("{:02}", dstEndDay) "060000"
+
+    if (utcStamp >= dstStartUtc && utcStamp < dstEndUtc)
+        return -4
+    return -5
+}
+
+PriceTrackerNthSundayDay(year, month, nth) {
+    firstStamp := year Format("{:02}", month) "01000000"
+    FormatTime, wday, %firstStamp%, WDay
+    daysUntilSunday := Mod(8 - (wday + 0), 7)
+    return 1 + daysUntilSunday + ((nth - 1) * 7)
+}
+
+PriceTrackerJsonLine(timestamp, timestampUtc, assetJson) {
     json := "{"
         . """timestamp"":" PriceTrackerJsonString(timestamp) ","
+        . """timestampUtc"":" PriceTrackerJsonString(timestampUtc) ","
         . """assets"":[" assetJson "]"
         . "}"
     return json
@@ -1205,10 +1249,12 @@ PriceTrackerAssetJson(asset) {
     underlyingOpen := (IsObject(priceObj) && priceObj.HasKey("open15m") && priceObj.open15m > 0) ? priceObj.open15m : ""
     underlyingCurrent := (IsObject(priceObj) && priceObj.HasKey("price") && priceObj.price > 0) ? priceObj.price : ""
     marketName := IsObject(snapshot) ? snapshot.marketTicker : ""
+    marketCloseUtc := IsObject(snapshot) ? snapshot.closeTime : ""
 
     json := "{"
         . """assetName"":" PriceTrackerJsonString(assetName) ","
         . """marketName"":" PriceTrackerJsonString(marketName) ","
+        . """marketCloseUtc"":" PriceTrackerJsonString(marketCloseUtc) ","
         . """upPrice"":" PriceTrackerJsonNumber(upPrice) ","
         . """downPrice"":" PriceTrackerJsonNumber(downPrice) ","
         . """underlyingOpen"":" PriceTrackerJsonNumber(underlyingOpen) ","
