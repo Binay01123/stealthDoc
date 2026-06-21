@@ -30,14 +30,14 @@ privatekey
 ;  PAPER TRADING Strategy Configuration
 ; =========================
 assets := ["BTC", "ETH"]   ;correlation pair
-InitialBalance := 10000.00 ; paper-mode starting balance
 timeDelay := 15            ; activation window in minutes. 15 = monitor the whole 15m market.
-EntryRange := [0.8, 0.9]   ; [Min, Max] enter only when inverse pair sum is between 80c and 93c
+EntryRange := [0.8, 0.93]  ; [Min, Max] enter only when inverse pair sum is between 80c and 93c
 PairExit := 0.60           ; Stop Loss
-orderSize := 5            ; Size of order each shot
+orderSize := 5             ; Size of order each shot
 shots := 10                ; max pair entry shots per 15m market
 cooldownSec := 40          ; seconds to wait after one shot before seeking the next
 noEntryMinutes := 1        ; last N minutes allow no new entry shots;
+InitialBalance := 10000.00 ; paper-mode starting balance
 
 ; =============================================================
 ; Kalshi Order API Config 
