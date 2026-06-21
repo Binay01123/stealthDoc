@@ -30,29 +30,30 @@ privatekey
 ;  PAPER TRADING Strategy Configuration
 ; =========================
 assets := ["BTC", "ETH"]   ;correlation pair
+InitialBalance := 10000.00 ; paper-mode starting balance
 timeDelay := 15            ; activation window in minutes. 15 = monitor the whole 15m market.
 EntryRange := [0.8, 0.9]   ; [Min, Max] enter only when inverse pair sum is between 80c and 93c
-PairExit := 0.75           ; Stop Loss
-orderSize := 2             ; Size of order each shot
-shots := 5                 ; max pair entry shots per 15m market
+PairExit := 0.60           ; Stop Loss
+orderSize := 5            ; Size of order each shot
+shots := 10                ; max pair entry shots per 15m market
 cooldownSec := 40          ; seconds to wait after one shot before seeking the next
 noEntryMinutes := 1        ; last N minutes allow no new entry shots;
-InitialBalance := 10000.00 ; paper-mode starting balance
 
 ; =============================================================
 ; Kalshi Order API Config 
 ; DO NOT TOUCH BELOW VALUES UNLESS YOU KNOW WHAT YOU ARE DOING
 ; =============================================================
-BehaviorLookbackMs := 10000  ; behavior velocity lookback window
+BehaviorLookbackMs := 10000  
 BehaviorSignEpsBps := 0.25   ; moves within this many bps are treated as baseline
 BehaviorEmaAlpha := 0.22     ; smoothing for the behavior score stream
 PairExitOrderPrice := 0.01
 entryOrderPrice := 1.00      
-enableLiveOrders := false     ; paper mode: never submit signed/live orders
+enableLiveOrders := false     ; paper mode
 pollIntervalMs := 700
 marketRefreshMs := 5000       ; refresh market/session metadata less often; orderbook still refreshes every loop
 priceRefreshMs := 1500        ; throttle live asset price calls used only for LogStream
 restDelay := 2000            ; ms to let order rest before checking position
+paperLossExitFloor := 0.05 ; if PairExit is 0 or lower, use this paper-only loss floor so bad trades still close/register
 entryDiff := 0.00            ; legacy BUY offset; pair entry uses entryOrderPrice above.
 kalshiApiBase := "https://api.elections.kalshi.com"
 assetSeriesMap := { "BTC": "KXBTC15M", "ETH": "KXETH15M", "SOL": "KXSOL15M", "XRP": "KXXRP15M", "DOGE": "KXDOGE15M", "HYPE": "KXHYPE15M", "BNB": "KXBNB15M" }
@@ -64,9 +65,14 @@ paperOpenTrades := []
 paperPositionsByTicker := {}
 paperParticipatedMarkets := {}
 paperMarketsParticipated := 0
+paperCompletedMarkets := {}
+paperCompletedSessions := 0
 paperResolutionWins := 0
+paperLosses := 0
+paperStopLosses := 0
+paperBreakEvens := 0
 paperLastPnl := 0
-pairPhase := "WAIT_WINDOW"    ; WAIT_WINDOW | MONITORING | BUY_PENDING | IN_PAIR | BUY_FAILED | HAS_POSITION | EXITED
+pairPhase := "WAIT_WINDOW"  
 pairSessionKey := ""
 activePair := ""
 pendingPair := ""
@@ -92,7 +98,11 @@ pairBehaviorState := "WAITING"
 pairBehaviorScore := ""
 pairBehaviorHistory := []
 
-Log("Paper mode started | InitialBalance: $" FmtMoneyAbs(InitialBalance) " | EntryRange: " FmtEntryRange() " | BehaviorGate: SYNC | Exit < " FmtPairSum(PairExit) " | Window: last " timeDelay "m | Shots: " shots " x " orderSize " | Cooldown: " cooldownSec "s | No entry: last " noEntryMinutes "m | Assets: BTC/ETH")
+Log("Paper mode started | InitialBalance: " FmtMoney(InitialBalance) " | EntryRange: " FmtEntryRange() " | BehaviorGate: SYNC | Exit < " FmtPairSum(EffectivePairExit()) EffectivePairExitNote() " | Window: last " timeDelay "m | Shots: " shots " x " orderSize " | Cooldown: " cooldownSec "s | No entry: last " noEntryMinutes "m | Assets: BTC/ETH")
+if !PaperCanAffordMinimumEntry() {
+    pairPhase := "NO_BALANCE"
+    Log("PAIR not enough balance, nothing left to continue | balance " PaperBalanceText() " | minimum entry cost " FmtMoney(PaperMinimumEntryCost()))
+}
 
 loop {
     btcSnap := GetKalshiMarketSnapshot("BTC")
@@ -172,6 +182,7 @@ loop {
         }
 
         if (!IsObject(pendingPair) || PairSessionEnded(pendingPair, btcSnap, ethSnap)) {
+            PaperSetNoBalanceIfNeeded()
             Random, pollJitterMs, 0, 250
             sleepMs := pollIntervalMs + pollJitterMs
             Sleep %sleepMs%
@@ -179,7 +190,7 @@ loop {
         }
     }
 
-    ; --- Entry pending: buy orders were submitted but both legs are not confirmed yet. ---
+    
     if IsObject(pendingPair) {
         streamPair := IsObject(activePair) ? activePair : pendingPair
         LogPairStream(btcSnap, ethSnap, streamPair)
@@ -223,7 +234,7 @@ loop {
         continue
     }
 
-    ; --- In pair: hold the locked pair and look for additional shots. ---
+    
     if IsObject(activePair) {
         pairPhase := "IN_PAIR"
         LogPairStream(btcSnap, ethSnap, activePair)
@@ -267,6 +278,15 @@ loop {
         continue
     }
 
+    if (pairPhase = "NO_BALANCE") {
+        LogPairStream(btcSnap, ethSnap)
+        LogOnce("PAIR", "NO_BALANCE_STOP", "PAIR not enough balance, nothing left to continue | balance " PaperBalanceText())
+        Random, pollJitterMs, 0, 250
+        sleepMs := pollIntervalMs + pollJitterMs
+        Sleep %sleepMs%
+        continue
+    }
+
     minsLeft := PairMinutesLeft(btcSnap, ethSnap)
     inEntryWindow := (minsLeft > 0 && minsLeft <= timeDelay)
     entryAllowed := (inEntryWindow && minsLeft > noEntryMinutes)
@@ -295,7 +315,7 @@ loop {
 
     if (pairPhase != "MONITORING") {
         pairPhase := "MONITORING"
-        Log("PAIR Monitoring BTC/ETH inverse sums | EntryRange " FmtEntryRange() " | BehaviorGate SYNC | Exit < " FmtPairSum(PairExit) " | Shots " pairShotsSubmitted "/" shots)
+        Log("PAIR Monitoring BTC/ETH inverse sums | EntryRange " FmtEntryRange() " | BehaviorGate SYNC | Exit < " FmtPairSum(EffectivePairExit()) EffectivePairExitNote() " | Shots " pairShotsSubmitted "/" shots)
     }
 
     LogPairStream(btcSnap, ethSnap)
@@ -380,8 +400,15 @@ PairShotCooldownRemainingMs() {
     return (remaining > 0) ? remaining : 0
 }
 
+PairShotCooldownRemainingText() {
+    remainingMs := PairShotCooldownRemainingMs()
+    if (remainingMs <= 0)
+        return "READY"
+    return Ceil(remainingMs / 1000.0) "s"
+}
+
 LogPairShotStream() {
-    ; Paper dashboard intentionally keeps only bUP-eDOWN, eUP-bDOWN, P/L, and wins.
+    ; Pair stream is emitted from LogPairStream.
 }
 
 PairEntryWindowOpen(minsLeft) {
@@ -475,6 +502,8 @@ TrySubmitPairShot(candidatePair, allowAdd := false) {
     }
     if !PreparePairShot(candidatePair)
         return false
+    if !PaperEnsureCanAffordEntry(candidatePair)
+        return true
 
     behaviorText := candidatePair.HasKey("behaviorState") ? " | Behavior " candidatePair.behaviorState " score " FmtBehaviorScore(candidatePair.behaviorScore) : ""
     Log(candidatePair.name " shot " candidatePair.shotNumber "/" shots " triggered @ sum " FmtPairSum(candidatePair.sum) " in range " FmtEntryRange() behaviorText " | BTC " candidatePair.btcTicker " | ETH " candidatePair.ethTicker " | placing " candidatePair.orderSize " contracts per leg")
@@ -711,6 +740,8 @@ LogPairStream(btcSnap, ethSnap, lockedPair := "") {
     LogStream("eUP-bDOWN", FmtPairSum(sums.downUp))
     LogStream("P/L", FmtSignedMoney(PaperLivePnl(btcSnap, ethSnap)))
     LogStream("wins", PaperWinsText())
+    LogStream("balance", PaperBalanceText(btcSnap, ethSnap))
+    LogStream("cooldown", PairShotCooldownRemainingText())
 }
 
 PairLegSummary(pair) {
@@ -765,6 +796,21 @@ FmtEntryRange() {
     if (minValue = "" || maxValue = "")
         return "n/a"
     return FmtPairSum(minValue) "-" FmtPairSum(maxValue)
+}
+
+EffectivePairExit() {
+    global PairExit, paperLossExitFloor
+    configuredExit := PairExit + 0
+    if (configuredExit <= 0 && paperLossExitFloor > 0)
+        return paperLossExitFloor + 0
+    return configuredExit
+}
+
+EffectivePairExitNote() {
+    global PairExit, paperLossExitFloor
+    if ((PairExit + 0) <= 0 && paperLossExitFloor > 0)
+        return " (PairExit 0 -> " FmtPairSum(paperLossExitFloor) " paper loss floor)"
+    return ""
 }
 
 AttachPairBehavior(pair, behavior) {
@@ -999,6 +1045,13 @@ FmtMoneyAbs(value) {
     return Round(Abs(value + 0), 2)
 }
 
+FmtMoney(value) {
+    value := value + 0
+    if (value < 0)
+        return "-$" FmtMoneyAbs(value)
+    return "$" FmtMoneyAbs(value)
+}
+
 FmtSignedMoney(value) {
     value := value + 0
     if (value < 0)
@@ -1007,8 +1060,8 @@ FmtSignedMoney(value) {
 }
 
 PaperWinsText() {
-    global paperResolutionWins, paperMarketsParticipated
-    return paperResolutionWins "/" paperMarketsParticipated
+    global paperResolutionWins, paperCompletedSessions
+    return paperResolutionWins "/" paperCompletedSessions
 }
 
 PaperMarketKey(pair) {
@@ -1034,6 +1087,17 @@ PaperRegisterMarketParticipation(pair) {
     if !paperParticipatedMarkets.HasKey(key) {
         paperParticipatedMarkets[key] := true
         paperMarketsParticipated++
+    }
+}
+
+PaperRegisterCompletedSession(pair) {
+    global paperCompletedMarkets, paperCompletedSessions
+    key := PaperMarketKey(pair)
+    if (key = "")
+        return
+    if !paperCompletedMarkets.HasKey(key) {
+        paperCompletedMarkets[key] := true
+        paperCompletedSessions++
     }
 }
 
@@ -1103,6 +1167,8 @@ PaperBuyPair(pair) {
     global paperCash, paperOpenTrades, orderSize
     if !IsObject(pair)
         return false
+    if !PaperEnsureCanAffordEntry(pair)
+        return false
 
     trade := {}
     trade.marketKey := PaperMarketKey(pair)
@@ -1129,7 +1195,7 @@ PaperBuyPair(pair) {
     paperCash -= trade.entryCost
     paperOpenTrades.Push(trade)
     PaperRegisterMarketParticipation(pair)
-    Log(pair.name " PAPER entry filled @ exact sum " FmtPairSum(trade.entryCost / pairQty) " | cost $" FmtMoneyAbs(trade.entryCost) " | cash $" FmtMoneyAbs(paperCash))
+    Log(pair.name " PAPER entry filled @ exact sum " FmtPairSum(trade.entryCost / pairQty) " | cost " FmtMoney(trade.entryCost) " | cash " FmtMoney(paperCash) " | balance " PaperBalanceText())
     return true
 }
 
@@ -1139,6 +1205,8 @@ PaperOpenValue(btcSnap := "", ethSnap := "") {
     for _, trade in paperOpenTrades {
         for _, leg in trade.legs {
             legPrice := PaperCurrentLegPrice(leg.asset, leg.side, btcSnap, ethSnap)
+            if (legPrice = "" && leg.HasKey("entry"))
+                legPrice := leg.entry
             if (legPrice != "")
                 value += (legPrice + 0) * (leg.qty + 0)
         }
@@ -1152,14 +1220,95 @@ PaperLivePnl(btcSnap := "", ethSnap := "") {
     return paperLastPnl
 }
 
+PaperEquity(btcSnap := "", ethSnap := "") {
+    global paperCash
+    return (paperCash + 0) + PaperOpenValue(btcSnap, ethSnap)
+}
+
+PaperBalanceText(btcSnap := "", ethSnap := "") {
+    return FmtMoney(PaperEquity(btcSnap, ethSnap))
+}
+
+PaperAvailableCashText() {
+    global paperCash
+    return FmtMoney(paperCash)
+}
+
+PaperEntryCostInfo(pair) {
+    global orderSize
+    info := {}
+    info.cost := 0
+    info.qty := 0
+    if !IsObject(pair)
+        return info
+
+    pairQty := ""
+    for _, leg in pair.legs {
+        legCount := (leg.HasKey("count") && leg.count != "") ? (leg.count + 0) : (orderSize + 0)
+        legPrice := leg.price + 0
+        if (pairQty = "" || legCount < pairQty)
+            pairQty := legCount
+        info.cost += legPrice * legCount
+    }
+
+    info.qty := (pairQty = "") ? (orderSize + 0) : pairQty
+    return info
+}
+
+PaperMinimumEntryCost() {
+    global orderSize
+    minValue := EntryRangeMin()
+    if (minValue = "")
+        return ""
+    return (minValue + 0) * (orderSize + 0)
+}
+
+PaperCanAffordMinimumEntry() {
+    global paperCash
+    minCost := PaperMinimumEntryCost()
+    if (minCost = "")
+        return (paperCash > 0)
+    return ((paperCash + 0.000001) >= (minCost + 0))
+}
+
+PaperEnsureCanAffordEntry(pair) {
+    global paperCash, pairPhase, activePair
+    info := PaperEntryCostInfo(pair)
+    required := info.cost + 0
+    available := paperCash + 0
+    if (available + 0.000001 >= required)
+        return true
+
+    pairName := (IsObject(pair) && pair.HasKey("name")) ? pair.name : "PAIR"
+    LogOnce("PAIR", "NO_BALANCE_ENTRY_" CurrentQuarterIndex(), pairName " PAPER entry blocked: not enough balance | required " FmtMoney(required) " | cash " FmtMoney(available) " | balance " PaperBalanceText())
+    if (!IsObject(activePair) && !PaperCanAffordMinimumEntry()) {
+        pairPhase := "NO_BALANCE"
+        LogOnce("PAIR", "NO_BALANCE_STOP", "PAIR not enough balance, nothing left to continue | balance " PaperBalanceText())
+    }
+    return false
+}
+
+PaperSetNoBalanceIfNeeded() {
+    global activePair, pendingPair, pairPhase
+    if (IsObject(activePair) || IsObject(pendingPair))
+        return false
+    if PaperCanAffordMinimumEntry()
+        return false
+    pairPhase := "NO_BALANCE"
+    LogOnce("PAIR", "NO_BALANCE_STOP", "PAIR not enough balance, nothing left to continue | balance " PaperBalanceText())
+    return true
+}
+
 PaperClosePair(pair, btcSnap := "", ethSnap := "", mode := "EXIT") {
-    global paperCash, paperOpenTrades, paperResolutionWins
+    global paperCash, paperOpenTrades, paperResolutionWins, paperLosses, paperStopLosses, paperBreakEvens
     result := {}
     result.trades := 0
     result.contracts := 0
     result.entryCost := 0
     result.revenue := 0
     result.resolutionValue := 0
+    result.pnl := 0
+    result.outcome := ""
 
     if !IsObject(pair)
         return result
@@ -1201,9 +1350,23 @@ PaperClosePair(pair, btcSnap := "", ethSnap := "", mode := "EXIT") {
 
     paperOpenTrades := kept
     PaperClearPositionsForPair(pair)
+    result.pnl := result.revenue - result.entryCost
 
-    if (mode = "RESOLUTION" && result.trades > 0)
-        paperResolutionWins++
+    if (result.trades > 0) {
+        PaperRegisterCompletedSession(pair)
+        if (result.pnl > 0) {
+            paperResolutionWins++
+            result.outcome := "WIN"
+        } else if (result.pnl < 0) {
+            paperLosses++
+            if (mode = "EXIT")
+                paperStopLosses++
+            result.outcome := "LOSS"
+        } else {
+            paperBreakEvens++
+            result.outcome := "BREAKEVEN"
+        }
+    }
 
     return result
 }
@@ -1271,12 +1434,14 @@ MarkPairHeldToResolution() {
         return
 
     paperResult := PaperClosePair(activePair, activePair.lastBtcSnap, activePair.lastEthSnap, "RESOLUTION")
-    Log(activePair.name " PAPER held to resolution | payout value " FmtPairSum(paperResult.resolutionValue) " | revenue $" FmtMoneyAbs(paperResult.revenue) " | P/L " FmtSignedMoney(PaperLivePnl()))
+    Log(activePair.name " PAPER held to resolution | " paperResult.outcome " | payout value " FmtPairSum(paperResult.resolutionValue) " | revenue " FmtMoney(paperResult.revenue) " | close P/L " FmtSignedMoney(paperResult.pnl) " | total P/L " FmtSignedMoney(PaperLivePnl()))
     ClearPairPositionState()
     ResetPairShotState()
     ClearKalshiMarketCache("BTC")
     ClearKalshiMarketCache("ETH")
-    pairPhase := "WAIT_WINDOW"
+    pairPhase := PaperCanAffordMinimumEntry() ? "WAIT_WINDOW" : "NO_BALANCE"
+    if (pairPhase = "NO_BALANCE")
+        LogOnce("PAIR", "NO_BALANCE_STOP", "PAIR not enough balance, nothing left to continue | balance " PaperBalanceText())
 }
 
 TryExitLockedPairIfNeeded(btcSnap, ethSnap) {
@@ -1286,10 +1451,11 @@ TryExitLockedPairIfNeeded(btcSnap, ethSnap) {
 
     PaperRememberLatestSnapshots(activePair, btcSnap, ethSnap)
     lockedSum := PairCurrentSum(activePair, btcSnap, ethSnap)
-    if (lockedSum = "" || lockedSum >= PairExit)
+    effectiveExit := EffectivePairExit()
+    if (lockedSum = "" || lockedSum >= effectiveExit)
         return false
 
-    Log(activePair.name " PAPER exit triggered @ locked sum " FmtPairSum(lockedSum) " < " FmtPairSum(PairExit) " | calculating exit at exact current prices")
+    Log(activePair.name " PAPER exit triggered @ locked sum " FmtPairSum(lockedSum) " < " FmtPairSum(effectiveExit) EffectivePairExitNote() " | calculating exit at exact current prices")
 
     if IsObject(pendingPair) {
         CancelKalshiOrders(pendingEntryOrderIds)
@@ -1303,9 +1469,11 @@ TryExitLockedPairIfNeeded(btcSnap, ethSnap) {
         ResetPairShotState()
         ClearKalshiMarketCache("BTC")
         ClearKalshiMarketCache("ETH")
-        pairPhase := "EXITED"
+        pairPhase := PaperCanAffordMinimumEntry() ? "EXITED" : "NO_BALANCE"
+        if (pairPhase = "NO_BALANCE")
+            LogOnce("PAIR", "NO_BALANCE_STOP", "PAIR not enough balance, nothing left to continue | balance " PaperBalanceText(btcSnap, ethSnap))
     } else {
-        Log(activePair.name " PAPER EXIT FAILED; will retry while locked sum remains below " FmtPairSum(PairExit))
+        Log(activePair.name " PAPER EXIT FAILED; will retry while locked sum remains below " FmtPairSum(effectiveExit))
     }
     return true
 }
@@ -1315,7 +1483,7 @@ ExitPairPosition(pair, btcSnap := "", ethSnap := "") {
         return true
 
     paperResult := PaperClosePair(pair, btcSnap, ethSnap, "EXIT")
-    Log(pair.name " PAPER exit @ exact current prices | revenue $" FmtMoneyAbs(paperResult.revenue) " | closed " paperResult.contracts " pair contracts")
+    Log(pair.name " PAPER exit @ exact current prices | " paperResult.outcome " | revenue " FmtMoney(paperResult.revenue) " | close P/L " FmtSignedMoney(paperResult.pnl) " | closed " paperResult.contracts " pair contracts")
     return true
 }
 
