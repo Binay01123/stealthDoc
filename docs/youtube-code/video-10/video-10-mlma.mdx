@@ -897,7 +897,11 @@ BuildClientOrderId(ticker, action, side) {
     if (nowUtc = "")
         nowUtc := A_Now
     Random, r, 100000, 999999
-    return ticker "-" action "-" side "-" nowUtc "-" A_TickCount "-" r
+    marketToken := RegExReplace(ticker, "^KX([A-Z0-9]+)15M.*$", "$1")
+    if (marketToken = ticker || marketToken = "")
+        marketToken := SubStr(RegExReplace(ticker, "[^A-Za-z0-9]", ""), 1, 12)
+    clientOrderId := marketToken "-" action "-" side "-" nowUtc "-" A_TickCount "-" r
+    return SubStr(clientOrderId, 1, 64)
 }
 
 CurrentTimeMillis() {
