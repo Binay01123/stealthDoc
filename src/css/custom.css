@@ -31,6 +31,30 @@
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
 }
 
+/* Keep Docusaurus tips, warnings, and other admonitions compact. */
+.theme-admonition {
+  --ifm-alert-padding-horizontal: 0.85rem;
+  --ifm-alert-padding-vertical: 0.65rem;
+  margin-bottom: 0.85rem;
+}
+
+.theme-admonition > [class*='admonitionHeading']:not(:last-child) {
+  margin-bottom: 0.25rem;
+}
+
+.theme-admonition [class*='admonitionContent'] > p {
+  margin-bottom: 0.45rem;
+}
+
+.text-highlight-yellow {
+  padding: 0.08em 0.24em;
+  border-radius: 0.2em;
+  background-color: #ffd700;
+  color: #171717;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
 /* Video Container for Responsive YouTube Embeds */
 .video-container {
   position: relative;
@@ -397,7 +421,7 @@ details.code-block-collapsible .theme-code-block pre {
 
 .btn-nightshark-small {
   position: relative;
-  margin: 0.5rem 0 0;
+  margin: 0.15rem 0 0;
   padding: 8px 18px;
   outline: none;
   text-decoration: none;
