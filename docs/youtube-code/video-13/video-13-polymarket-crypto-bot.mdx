@@ -3,7 +3,6 @@ id: video-13-polymarket-crypto-bot
 title: "Video 13: Polymarket Crypto Trading Bot"
 sidebar_label: "Video 13: Polymarket Bot v2"
 sidebar_position: 14
-draft: true
 slug: /youtube-code/video-13-polymarket-crypto-bot
 description: Automate Polymarket crypto markets across 5-minute, 15-minute, and 1-hour timeframes with entry zones, stop loss, delta, time-delay, take-profit, paper-trading, and live-trading controls.
 keywords: [Polymarket trading bot, Polymarket crypto bot, Polymarket automation, Polymarket paper trading, Polymarket live trading, Polymarket 5 minute bot, Polymarket 15 minute bot, Polymarket 1 hour bot, Polymarket entry zone, Polymarket stop loss, Polymarket delta, Polymarket take profit]
@@ -40,7 +39,7 @@ TimeFrame := "15M"             ; Options: 5M, 15M, 1H
 timeDelay := 15                ; activation window in remaining minutes; cannot exceed TimeFrame duration
 EntryRange := [0.60, 0.80]     ; inclusive entry range: [Min, Max]
 Exit := 0.40                  ; stop loss when entered side price < this value
-TakeProfitPts := 0.10         ; take profit at confirmed fill price + these points
+TakeProfitPts := 0.10         ; take profit at confirmed fill price + these points; 1 holds winners to resolution
 Delta := 0                    ; min |market-source open - live market-source price| required alongside EntryRange
 orderSize := 5                ; exact number of contracts requested per entry
 
@@ -64,8 +63,8 @@ else
     polymarketAssetSlugPrefix := { "BTC": "bitcoin-up-or-down", "ETH": "ethereum-up-or-down", "SOL": "solana-up-or-down", "XRP": "xrp-up-or-down", "DOGE": "dogecoin-up-or-down", "HYPE": "hype-up-or-down", "BNB": "bnb-up-or-down" }
 polymarketChainlinkSymbolMap := { "BTC": "btc/usd", "ETH": "eth/usd", "SOL": "sol/usd", "XRP": "xrp/usd", "DOGE": "doge/usd", "HYPE": "hype/usd", "BNB": "bnb/usd" }
 polymarketBinanceSymbolMap := { "BTC": "btcusdt", "ETH": "ethusdt", "SOL": "solusdt", "XRP": "xrpusdt", "DOGE": "dogeusdt", "HYPE": "hypeusdt", "BNB": "bnbusdt" }   ; 1H markets resolve on Binance spot
-polymarketFeedLiveMaxAgeMs := 60000   ; live price from the pmkt-helper feed is trusted for this long
-polymarketHttpTimeoutMs := 1000       ; total wait per public HTTP stage; the outer loop retries failures
+polymarketFeedLiveMaxAgeMs := 60000   
+polymarketHttpTimeoutMs := 1000    
 
 TimeFrame := Trim(TimeFrame)
 StringUpper, TimeFrame, TimeFrame
@@ -118,9 +117,9 @@ if (!exitValid) {
     settingsValid := false
 }
 
-takeProfitPtsValid := IsNumericStr(TakeProfitPts) && (TakeProfitPts + 0) > 0 && (TakeProfitPts + 0) < 1
+takeProfitPtsValid := IsNumericStr(TakeProfitPts) && (TakeProfitPts + 0) > 0 && (TakeProfitPts + 0) <= 1
 if (!takeProfitPtsValid) {
-    Log("ERROR: TakeProfitPts is '" TakeProfitPts "'. It needs to be a decimal between 0 and 1, for example 0.10.")
+    Log("ERROR: TakeProfitPts is '" TakeProfitPts "'. It needs to be greater than 0 and no more than 1, for example 0.10 or 1.")
     settingsValid := false
 }
 
@@ -153,6 +152,9 @@ if (!settingsValid) {
     stopCode()
     return
 }
+if ((TakeProfitPts + 0) = 1)
+    Log("TakeProfitpts = 1 , winner will be held to resolution")
+
 ; Track one open position per asset.
 positions := {}
 assetPhase := {}              ; WAIT_WINDOW | MONITORING | IN_POSITION
@@ -163,7 +165,7 @@ assetMarketRefreshTick := {}
 assetSessionOpenPrice := {}
 assetSessionOpenKey := {}
 assetMarketLogStreamVisible := {}
-assetFeedLive := {}           ; latest live price per asset from the pmkt-helper feed
+assetFeedLive := {}           
 
 ; Paper trading state.
 paperBalance := initialBalance + 0
@@ -175,9 +177,7 @@ paperTradeCount := 0
 
 Log("Polymarket PAPER TRADING Started | TimeFrame: " TimeFrame " | EntryRange: [" EntryMin ", " EntryMax "] | Contracts: " orderSize " | Exit: " Exit " | TakeProfitPts: " TakeProfitPts " | Delta: " Delta " | Window: last " timeDelay "m | InitialBalance: " Fmt2(initialBalance))
 
-; Start the local websocket feed early (template function) so midpoints are
-; already streaming when the first session begins. Until it has helper-backed
-; mids and live prices, the strategy waits instead of using REST prices.
+
 feedStartupWaitLogged := true
 feedStartupTick := A_TickCount
 strategyStartupTick := A_TickCount
@@ -638,8 +638,6 @@ HidePolymarketMarketLogStream(asset) {
 GetCachedPolymarketLivePriceObj(asset, snapshot, forceRefresh := false) {
     global assetFeedLive, polymarketFeedLiveMaxAgeMs
 
-    ; Only use live prices captured from the pmkt-helper feed call made
-    ; earlier this loop pass while refreshing the midpoints.
     if (IsObject(assetFeedLive) && assetFeedLive.HasKey(asset)) {
         entry := assetFeedLive[asset]
         if ((A_TickCount - entry.tick) <= polymarketFeedLiveMaxAgeMs)
@@ -776,8 +774,7 @@ ClearPolymarketMarketCache(asset) {
         assetMarketRefreshTick.Delete(asset)
 }
 
-; The outer strategy loop is the retry mechanism. Keeping one attempt here
-; prevents internal retries from overrunning the startup budget.
+
 GetPolymarketMarketSnapshot(asset, maxRetries := 1) {
     global polymarketGammaApi, polymarketAssetSlugPrefix, assetSnapshotCache, assetMarketRefreshTick, marketRefreshMs, polymarketHttpTimeoutMs
     if !polymarketAssetSlugPrefix.HasKey(asset)
@@ -873,9 +870,7 @@ RefreshPolymarketBestPrices(asset, snapshot) {
     FetchPolymarketTokenPricePair(asset, snapshot.upTokenId, snapshot.downTokenId, upPrice, downPrice)
     snapshot.minutesLeft := SnapshotMinutesLeft(snapshot)
 
-    ; Update only as a matched pair: pairing a fresh side with a stale one
-    ; could mislead the entry/exit checks, and no side is ever derived from
-    ; the other.
+
     if (upPrice = "" || downPrice = "")
         return false
     snapshot.up := upPrice + 0
@@ -948,10 +943,7 @@ PolymarketNthSundayDay(year, month, occurrence) {
     return firstSunday + ((occurrence - 1) * 7)
 }
 
-; Midpoint ((best bid + best ask) / 2) is the sole price source for entries
-; and exits. The only runtime source is the pmkt-helper local websocket feed
-; via the template's GetPolymarketMidpointPair; missing helper-backed values
-; stay empty until the next loop pass.
+
 FetchPolymarketTokenPricePair(asset, upTokenId, downTokenId, ByRef upPrice, ByRef downPrice) {
     upPrice := ""
     downPrice := ""
@@ -961,12 +953,7 @@ FetchPolymarketTokenPricePair(asset, upTokenId, downTokenId, ByRef upPrice, ByRe
     PolymarketFeedBulkFetch(asset, upTokenId, downTokenId, upPrice, downPrice)
 }
 
-; =====================================================
-; pmkt-helper local feed glue (template does the I/O)
-; =====================================================
-; Wraps the template's GetPolymarketMidpointPair: midpoints go back to the
-; caller and the live market-source price is captured per asset for the
-; LIVE DELTA check. Values the feed cannot vouch for stay empty.
+
 PolymarketFeedBulkFetch(asset, upTokenId, downTokenId, ByRef upMid, ByRef downMid) {
     global assetFeedLive, feedStartupWaitLogged, feedStartupReadyLogged, feedStartupTick
     upMid := ""
@@ -1017,9 +1004,7 @@ PolymarketFeedLiveSymbol(asset) {
     return symbol "/usd," symbol "usdt"
 }
 
-; Fractional WaitForResponse timeouts are not portable across implementations.
-; Polling completed response properties keeps the shared deadline in ms and
-; never extends it while another request in the batch is being received.
+
 PolymarketHttpAwaitResponse(http, deadlineTick) {
     loop {
         try {
@@ -1061,9 +1046,6 @@ ExtractLargeNumberAfter(text, marker, index) {
 
 PolymarketHttpGet(url, timeoutMs := 0) {
     global httpPublicObj, polymarketHttpTimeoutMs
-    ; Always use the persistent request object: reusing it keeps the TLS
-    ; connection alive, while the shared runtime HttpGet builds a new COM
-    ; object (new handshake, no timeouts) on every call.
     try {
         if (timeoutMs <= 0)
             timeoutMs := polymarketHttpTimeoutMs
@@ -1141,6 +1123,7 @@ IsoUtcToAhk(iso) {
         return ""
     return m1 m2 m3 m4 m5 m6
 }
+
 ```
 
 
@@ -1176,9 +1159,9 @@ IsoUtcToAhk(iso) {
 assets := ["BTC"]             ; Options ["ETH"], ["SOL"], ["XRP"], ["DOGE"], ["HYPE"], ["BNB"]
 TimeFrame := "5M"             ; Options: 5M, 15M, 1H
 timeDelay := 5                ; activation window in remaining minutes; cannot exceed TimeFrame duration
-EntryRange := [0.70, 0.70]     ; inclusive entry range: [Min, Max]
+EntryRange := [0.70, 0.80]     ; inclusive entry range: [Min, Max]
 Exit := 0.40                  ; stop loss when entered side price < this value
-TakeProfitPts := 0.10         ; take profit at confirmed fill price + these points
+TakeProfitPts := 0.10         ; take profit at confirmed fill price + these points; 1 holds winners to resolution
 Delta := 0                    ; min |market-source open - live market-source price| required alongside EntryRange
 orderSize := 5                ; exact number of contracts requested per entry
 
@@ -1232,9 +1215,9 @@ if (!exitValid) {
     settingsValid := false
 }
 
-takeProfitPtsValid := IsNumericStr(TakeProfitPts) && (TakeProfitPts + 0) > 0 && (TakeProfitPts + 0) < 1
+takeProfitPtsValid := IsNumericStr(TakeProfitPts) && (TakeProfitPts + 0) > 0 && (TakeProfitPts + 0) <= 1
 if (!takeProfitPtsValid) {
-    Log("ERROR: TakeProfitPts is '" TakeProfitPts "'. It needs to be a decimal between 0 and 1, for example 0.10.")
+    Log("ERROR: TakeProfitPts is '" TakeProfitPts "'. It needs to be greater than 0 and no more than 1, for example 0.10 or 1.")
     settingsValid := false
 }
 
@@ -1263,6 +1246,8 @@ if (!settingsValid) {
     stopCode()
     return
 }
+if ((TakeProfitPts + 0) = 1)
+    Log("TakeProfitpts = 1 , winner will be held to resolution")
 
 enableLiveOrders := true
 pollIntervalMs := 250
@@ -1328,9 +1313,7 @@ if (polymarketSignerPath = "")
     polymarketSignerPath := FindNightSharkSigner()
 Log("Polymarket Application Started | TimeFrame: " TimeFrame " | EntryRange: [" EntryMin ", " EntryMax "] | Contracts: " orderSize " | EntryOrder: " polymarketEntryOrderType " | ExitOrder: " polymarketExitOrderType " | Exit: " Exit " | TakeProfitPts: " TakeProfitPts " | Delta: " Delta " | Window: last " timeDelay "m")
 
-; Start the local websocket feed early (template function) so midpoints are
-; already streaming when the first session begins. The log goes out first:
-; launching a brand-new binary can be held by antivirus for many seconds.
+
 feedStartupWaitLogged := true
 Log("Starting up Polymarket dependencies, please wait...")
 EnsurePolymarketFeedHelper()
@@ -1786,8 +1769,6 @@ LogMonitoringStream(asset, snapshot, livePrice := "", openPrice := "", LiveDelta
 GetCachedPolymarketLivePriceObj(asset, snapshot, forceRefresh := false) {
     global assetFeedLive, polymarketFeedLiveMaxAgeMs
 
-    ; Only use live prices captured from the pmkt-helper feed call made
-    ; earlier this loop pass while refreshing the midpoints.
     if (IsObject(assetFeedLive) && assetFeedLive.HasKey(asset)) {
         entry := assetFeedLive[asset]
         if ((A_TickCount - entry.tick) <= polymarketFeedLiveMaxAgeMs)
@@ -2165,7 +2146,6 @@ PlacePolymarketOrder(action, tokenId, side, price, size, clientOrderId := "") {
         Sleep 500
         filledAfterCancel := GetPolymarketPositionSizeChecked(tokenId, filledAfterCancelQueryOk)
         if (!cancelConfirmed) {
-            ; The order may have completed while cancellation was in flight.
             cancelConfirmed := PolymarketCancelOrder(orderId, cancelOutcome)
             Sleep 500
             latestFilledSize := GetPolymarketPositionSizeChecked(tokenId, latestFilledQueryOk)
@@ -2249,8 +2229,6 @@ PlacePolymarketOrder(action, tokenId, side, price, size, clientOrderId := "") {
         return true
     }
 
-    ; A sell may finish while the positions feed still reports the old balance.
-    ; Query the CLOB order itself before attempting cancellation or another sell.
     orderState := PolymarketGetOrderState(orderId)
     if (orderState = "matched") {
         polymarketLastOrderResult.filledSize := positionBeforeOrder + 0
@@ -2672,7 +2650,6 @@ FetchPolymarketCashBalance(ByRef cashBalance, ByRef errorText) {
         return false
     }
 
-    ; Polymarket collateral uses six decimal places; the API returns base units.
     cashBalance := (balanceUnits + 0) / 1000000.0
     return true
 }
@@ -2707,8 +2684,6 @@ AbsoluteCredentialPath(path) {
     if (path = "" || !FileExist(path))
         return ""
 
-    ; A_LoopFileFullPath resolves relative paths against the current working
-    ; directory now, so signer subprocesses never receive a relative path.
     Loop, Files, %path%, F
         return A_LoopFileFullPath
     return ""
@@ -3110,7 +3085,6 @@ GetPolymarketMarketSnapshot(asset, maxRetries := 1) {
             FetchPolymarketTokenPricePair(asset, upTokenId, downTokenId, upPrice, downPrice)
             minsLeft := (window.endSec - CurrentUnixSeconds()) / 60.0
 
-            ; Skip markets that already closed or close in < 30 seconds (stale/expired)
             if (minsLeft != "" && minsLeft < 0.5) {
                 if (attempt < maxRetries) {
                     Sleep 200
@@ -3163,9 +3137,7 @@ RefreshPolymarketBestPrices(asset, snapshot) {
     FetchPolymarketTokenPricePair(asset, snapshot.upTokenId, snapshot.downTokenId, upPrice, downPrice)
     snapshot.minutesLeft := SnapshotMinutesLeft(snapshot)
 
-    ; Update only as a matched pair: pairing a fresh side with a stale one
-    ; could mislead the entry/exit checks, and no side is ever derived from
-    ; the other.
+
     if (upPrice = "" || downPrice = "")
         return false
     snapshot.up := upPrice + 0
@@ -3238,11 +3210,7 @@ PolymarketNthSundayDay(year, month, occurrence) {
     return firstSunday + ((occurrence - 1) * 7)
 }
 
-; Midpoint ((best bid + best ask) / 2) is the sole price source for entries
-; and exits. The only runtime source is the pmkt-helper local websocket feed
-; via the template's GetPolymarketMidpointPair; missing helper-backed values
-; stay empty until the next loop pass. Orders are unaffected: they are priced
-; by the polymarketBuyLimitPrice/polymarketSellLimitPrice limits, not by up/down.
+
 FetchPolymarketTokenPricePair(asset, upTokenId, downTokenId, ByRef upPrice, ByRef downPrice) {
     upPrice := ""
     downPrice := ""
@@ -3252,12 +3220,7 @@ FetchPolymarketTokenPricePair(asset, upTokenId, downTokenId, ByRef upPrice, ByRe
     PolymarketFeedBulkFetch(asset, upTokenId, downTokenId, upPrice, downPrice)
 }
 
-; =====================================================
-; pmkt-helper local feed glue (template does the I/O)
-; =====================================================
-; Wraps the template's GetPolymarketMidpointPair: midpoints go back to the
-; caller and the live market-source price is captured per asset for the
-; LIVE DELTA check. Values the feed cannot vouch for stay empty.
+
 PolymarketFeedBulkFetch(asset, upTokenId, downTokenId, ByRef upMid, ByRef downMid) {
     global assetFeedLive, feedStartupWaitLogged, feedStartupReadyLogged
     upMid := ""
@@ -3266,7 +3229,6 @@ PolymarketFeedBulkFetch(asset, upTokenId, downTokenId, ByRef upMid, ByRef downMi
         return false
 
     if (!GetPolymarketMidpointPair(upTokenId, downTokenId, PolymarketFeedLiveSymbol(asset), upMid, downMid, livePrice)) {
-        ; No answer on first contact means the helper is still cold-starting.
         if (!feedStartupWaitLogged && !feedStartupReadyLogged) {
             feedStartupWaitLogged := true
             Log("Starting up Polymarket dependencies, please wait...")
@@ -3306,9 +3268,7 @@ PolymarketFeedLiveSymbol(asset) {
     return symbol "/usd," symbol "usdt"
 }
 
-; Fractional WaitForResponse timeouts are not portable across implementations.
-; Polling completed response properties keeps the shared deadline in ms and
-; never extends it while another request in the batch is being received.
+
 PolymarketHttpAwaitResponse(http, deadlineTick) {
     loop {
         try {
@@ -3350,9 +3310,6 @@ ExtractLargeNumberAfter(text, marker, index) {
 
 PolymarketHttpGet(url, timeoutMs := 0) {
     global httpPublicObj, polymarketHttpTimeoutMs
-    ; Always use the persistent request object: reusing it keeps the TLS
-    ; connection alive, while the shared runtime HttpGet builds a new COM
-    ; object (new handshake, no timeouts) on every call.
     try {
         if (timeoutMs <= 0)
             timeoutMs := polymarketHttpTimeoutMs
