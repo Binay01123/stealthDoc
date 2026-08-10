@@ -40,6 +40,7 @@ const sidebars = {
         'youtube-code/video-11/video-11-kalshi-arbitrage',
         'youtube-code/video-12/video-12-kalshi-backtesting',
         'youtube-code/video-13/video-13-polymarket-crypto-bot',
+        'youtube-code/video-14/video-14-kalshi-v5',
       ],
       collapsible: true,
       collapsed: false,

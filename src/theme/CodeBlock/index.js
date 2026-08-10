@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import CodeBlock from '@theme-original/CodeBlock';
 import clsx from 'clsx';
 
@@ -26,18 +26,46 @@ export default function CodeBlockWrapper(props) {
 
   // Auto-collapse logic for long code blocks
   const [isExpanded, setIsExpanded] = useState(false);
+  const wrapperRef = useRef(null);
   const lineCount = typeof children === 'string' ? children.split('\n').length : 0;
   const isLong = lineCount > 25; // Threshold for "too long"
 
+  const collapseSnippet = () => {
+    setIsExpanded(false);
+    window.requestAnimationFrame(() => {
+      wrapperRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+      wrapperRef.current
+        ?.querySelector('.expand-button')
+        ?.focus({preventScroll: true});
+    });
+  };
+
   if (isLong) {
     return (
-      <div className={clsx('code-block-wrapper', { 'expanded': isExpanded })}>
+      <div
+        ref={wrapperRef}
+        className={clsx('code-block-wrapper', {'expanded': isExpanded})}>
+        {isExpanded && (
+          <div className="code-block-collapse-control">
+            <button
+              aria-expanded="true"
+              className="collapse-button"
+              onClick={collapseSnippet}
+              type="button">
+              Collapse Snippet
+            </button>
+          </div>
+        )}
         <div className={clsx('code-block-content', { 'collapsed': !isExpanded })}>
           <CodeBlock {...props} />
         </div>
         {!isExpanded && (
           <div className="code-block-overlay">
             <button 
+              aria-expanded="false"
               className="clean-btn expand-button" 
               onClick={() => setIsExpanded(true)}
               type="button"
