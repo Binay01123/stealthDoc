@@ -95,6 +95,7 @@ restDelay := 2000            ; ms to let order rest before checking position
 entryDiff := 0.02           ; added to price on BUY orders (aggressive entry)
 exitDiff := 0.02             ; subtracted from price on SELL orders (aggressive exit)    
 kalshiApiBase := "https://api.elections.kalshi.com"
+kalshiCryptoExchangeIndex := 2
 assetSeriesMap := { "BTC": "KXBTC15M", "ETH": "KXETH15M", "SOL": "KXSOL15M", "XRP": "KXXRP15M", "DOGE": "KXDOGE15M", "HYPE": "KXHYPE15M", "BNB": "KXBNB15M" }
 kalshiApiKeyId := ""
 kalshiApiKeyFile := "reactions/apikey.json"          
@@ -114,6 +115,7 @@ assetSnapshotCache := {}
 assetMarketRefreshTick := {}
 assetPriceCache := {}
 assetPriceRefreshTick := {}
+kalshiShardFundingSessionStatus := {}
 
 LoadKalshiCredentialsFromFiles()
 if (kalshiSignerPath = "")
@@ -156,7 +158,13 @@ loop {
             assetPhase[asset] := "WAIT_WINDOW"
             assetLastPriceLogTick[asset] := 0
             LogOnceReset(asset)
-            Log(asset " New session (" snapshot.marketTicker ")")
+            Log(asset " New session (" snapshot.marketTicker ", shard " kalshiCryptoExchangeIndex ")")
+
+            if (!EnsureKalshiCryptoShardFunding(asset)) {
+                assetPhase[asset] := "FUNDING_FAILED"
+                Log(asset " Shard funding unavailable; skipping this session")
+                continue
+            }
 
             if (snapshot.marketTicker != "" && HasExistingPosition(snapshot.marketTicker))
                 assetPhase[asset] := "HAS_POSITION"
@@ -209,6 +217,11 @@ loop {
 
         if (assetPhase[asset] = "HAS_POSITION") {
             LogOnce(asset, "HAS_POSITION", asset " Existing position, waiting for next session")
+            continue
+        }
+
+        if (assetPhase[asset] = "FUNDING_FAILED") {
+            LogOnce(asset, "FUNDING_FAILED", asset " Shard funding failed, waiting for next session")
             continue
         }
 
@@ -443,10 +456,11 @@ SellPosition(asset, side, price, reason, clientOrderId := "") {
 }
 
 HasExistingPosition(marketTicker) {
+    global kalshiCryptoExchangeIndex
     if (marketTicker = "")
         return false
 
-    res := KalshiSignedRequest("GET", "/trade-api/v2/portfolio/positions?ticker=" marketTicker)
+    res := KalshiSignedRequest("GET", "/trade-api/v2/portfolio/positions?ticker=" marketTicker "&exchange_index=" kalshiCryptoExchangeIndex)
     if !IsObject(res) || (res.status != 200)
         return false
 
@@ -510,6 +524,7 @@ PlaceKalshiOrder(action, marketTicker, side, price, size, clientOrderId := "") {
         . """post_only"":false,"
         . """cancel_order_on_pause"":false,"
         . """reduce_only"":" reduceOnly ","
+        . """exchange_index"":2,"
         . """client_order_id"":""" clientOrderId """"
         . "}"
 
@@ -719,10 +734,135 @@ KalshiCompactLogText(s, maxLen := 160) {
     return s
 }
 
+KalshiShardBalanceSnapshot(exchangeIndex, maxAttempts := 1) {
+    snapshot := { ok: false, balance: "", status: "", body: "" }
+    endpoint := "/trade-api/v2/portfolio/balance?exchange_index=" exchangeIndex
+    attempt := 1
+    while (attempt <= maxAttempts) {
+        res := KalshiSignedRequest("GET", endpoint)
+        if IsObject(res) {
+            snapshot.status := res.status
+            snapshot.body := res.body
+            if (res.status = 200) {
+                balanceDollars := JsonField(res.body, "balance_dollars")
+                if IsNumericStr(balanceDollars) {
+                    snapshot.ok := true
+                    snapshot.balance := balanceDollars + 0
+                    return snapshot
+                }
+            }
+            if (InStr(JsonField(res.body, "code"), "user_not_found") = 1) {
+                snapshot.ok := true
+                snapshot.balance := 0
+                return snapshot
+            }
+        }
+        if (attempt < maxAttempts)
+            Sleep 150
+        attempt++
+    }
+    return snapshot
+}
+
+EnsureKalshiCryptoShardFunding(context) {
+    global enableLiveOrders, orderSize, assets, kalshiCryptoExchangeIndex, kalshiShardFundingSessionStatus
+    if (!enableLiveOrders)
+        return true
+
+    fundingSessionKey := kalshiCryptoExchangeIndex "|" CurrentQuarterIndex()
+    if !IsObject(kalshiShardFundingSessionStatus)
+        kalshiShardFundingSessionStatus := {}
+    if kalshiShardFundingSessionStatus.HasKey(fundingSessionKey)
+        return (kalshiShardFundingSessionStatus[fundingSessionKey] = "READY")
+    kalshiShardFundingSessionStatus[fundingSessionKey] := "PENDING"
+
+    assetCount := IsObject(assets) ? assets.Length() : 1
+    if (assetCount < 1)
+        assetCount := 1
+    requiredDollars := (orderSize + 0) * assetCount
+    destination := KalshiShardBalanceSnapshot(kalshiCryptoExchangeIndex, 3)
+    if (!IsObject(destination) || !destination.ok) {
+        kalshiShardFundingSessionStatus[fundingSessionKey] := "FAILED"
+        Log("ERROR: " context " Could not read crypto shard balance; automatic funding skipped")
+        return false
+    }
+
+    currentBalance := destination.balance + 0
+    baseFundingReady := (currentBalance >= (requiredDollars - 0.000001))
+    if (baseFundingReady) {
+        transferCenticents := Ceil(((orderSize + 0) * 10000) - 0.000001)
+        transferDollars := transferCenticents / 10000.0
+        confirmationTargetDollars := currentBalance + transferDollars
+        transferReason := "additional agent reserve"
+    } else {
+        transferCenticents := Ceil(((requiredDollars - currentBalance) * 10000) - 0.000001)
+        transferDollars := transferCenticents / 10000.0
+        confirmationTargetDollars := requiredDollars
+        transferReason := "shortfall top-up"
+    }
+
+    source := KalshiShardBalanceSnapshot(0, 3)
+    if (!IsObject(source) || !source.ok || (source.balance + 0) < (transferDollars - 0.000001)) {
+        if (baseFundingReady) {
+            kalshiShardFundingSessionStatus[fundingSessionKey] := "READY"
+            Log("WARN: " context " Additional agent reserve unavailable from shard 0; continuing because shard 2 met the base requirement before this optional transfer")
+            return true
+        }
+        kalshiShardFundingSessionStatus[fundingSessionKey] := "FAILED"
+        Log("ERROR: " context " Shard 2 top-up needs $" Format("{:.4f}", transferDollars) " from shard 0, but sufficient funds are unavailable")
+        return false
+    }
+
+    payload := "{"
+        . """source"":""event_contract"","
+        . """destination"":""event_contract"","
+        . """amount"":" transferCenticents ","
+        . """source_exchange_shard"":0,"
+        . """destination_exchange_shard"":2,"
+        . """source_subaccount"":0,"
+        . """destination_subaccount"":0"
+        . "}"
+    res := KalshiSignedRequest("POST", "/trade-api/v2/portfolio/intra_exchange_instance_transfer", payload)
+    responseAmbiguous := !IsObject(res) || res.status >= 500
+    if (!responseAmbiguous && res.status != 200) {
+        if (baseFundingReady) {
+            kalshiShardFundingSessionStatus[fundingSessionKey] := "READY"
+            Log("WARN: " context " Additional agent reserve rejected | HTTP " res.status " | " KalshiApiMessage(res.body) " | continuing because shard 2 met the base requirement before this optional transfer")
+            return true
+        }
+        kalshiShardFundingSessionStatus[fundingSessionKey] := "FAILED"
+        Log("ERROR: " context " Shard 2 top-up rejected | HTTP " res.status " | " KalshiApiMessage(res.body))
+        return false
+    }
+    if (responseAmbiguous)
+        Log("WARN: " context " Shard 2 top-up response ambiguous; verifying balance")
+    else
+        Log(context " Shard 2 " transferReason " requested | $" Format("{:.4f}", transferDollars) " | transfer_id=" JsonField(res.body, "transfer_id"))
+
+    Loop, 20 {
+        Sleep 500
+        destination := KalshiShardBalanceSnapshot(kalshiCryptoExchangeIndex, 1)
+        if (IsObject(destination) && destination.ok && (destination.balance + 0) >= (confirmationTargetDollars - 0.000001)) {
+            kalshiShardFundingSessionStatus[fundingSessionKey] := "READY"
+            Log(context " Shard 2 funding confirmed | $" Format("{:.4f}", destination.balance + 0) " available")
+            return true
+        }
+    }
+    if (baseFundingReady) {
+        kalshiShardFundingSessionStatus[fundingSessionKey] := "READY"
+        Log("WARN: " context " Additional agent reserve not confirmed within 10 seconds; continuing because shard 2 met the base requirement before this optional transfer. Order placement will report if balance is no longer sufficient.")
+        return true
+    }
+    kalshiShardFundingSessionStatus[fundingSessionKey] := "FAILED"
+    Log("ERROR: " context " Shard 2 top-up not confirmed within 10 seconds")
+    return false
+}
+
 CancelKalshiOrder(orderId) {
+    global kalshiCryptoExchangeIndex
     if (orderId = "")
         return
-    KalshiSignedRequest("DELETE", "/trade-api/v2/portfolio/events/orders/" orderId)
+    KalshiSignedRequest("DELETE", "/trade-api/v2/portfolio/events/orders/" orderId "?exchange_index=" kalshiCryptoExchangeIndex)
 }
 
 LoadKalshiCredentialsFromFiles() {

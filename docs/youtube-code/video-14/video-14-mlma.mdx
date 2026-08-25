@@ -965,12 +965,13 @@ TakeProfitPts := 0.10         ; take profit at confirmed fill price + these poin
 Delta := 0                   ; min |open15m - price| required alongside EntryRange
 assets := ["BTC"]            ; Options ["ETH"] ,["SOL"] ,["XRP"] , ["HYPE"] , ["BNB"] , ["DOGE"]
 orderSize := 1               ; number of contracts for trade
-Pings := 0                   ; one-second stop-loss confirmation checks; 0 exits immediately
+Pings := 1                   ; one-second stop-loss confirmation checks; 0 exits immediately
+
 ;=================
 ;DAILY TARGETS
 ;=================
-Daily_Profit_Target := 400     ; stop after closed-trade PnL is greater than this; 0 disables
-Daily_Loss_Target := -200       ; stop after closed-trade PnL is less than this negative value; 0 disables
+Daily_Profit_Target := 400     ; stop when aggregate Kalshi balance change is greater than this; 0 disables
+Daily_Loss_Target := -200       ; stop when aggregate Kalshi balance change is less than this; 0 disables
 
 
 ; =============================================================
@@ -1017,6 +1018,12 @@ if (!exitValid) {
 takeProfitPtsValid := IsNumericStr(TakeProfitPts) && (TakeProfitPts + 0) > 0 && (TakeProfitPts + 0) <= 1
 if (!takeProfitPtsValid) {
     Log("ERROR: TakeProfitPts is '" TakeProfitPts "'. It needs to be greater than 0 and no more than 1, for example 0.10 or 1.")
+    settingsValid := false
+}
+
+orderSizeValid := IsNumericStr(orderSize) && (orderSize + 0) > 0
+if (!orderSizeValid) {
+    Log("ERROR: orderSize is '" orderSize "'. It needs to be a positive number of contracts, for example 1 or 2.5.")
     settingsValid := false
 }
 
@@ -1075,6 +1082,7 @@ assetMarketRefreshTick := {}
 assetPriceCache := {}
 assetPriceRefreshTick := {}
 kalshiLastOrderResult := {}
+kalshiShardFundingSessionStatus := {}
 
 ; Live PnL for trades opened by this script run.
 kalshiRealizedPnl := 0
@@ -1082,6 +1090,9 @@ kalshiWins := 0
 kalshiTradeCount := 0
 kalshiHasUntrackedPosition := false
 kalshiDailyTargetCheckPending := false
+kalshiDailyStartBalance := ""
+kalshiDailyLastBalance := ""
+kalshiDailyBalanceLastAttemptTick := 0
 pendingKalshiSettlements := {}
 pendingKalshiClosedTrades := {}
 kalshiSettlementLastCheckTick := {}
@@ -1130,10 +1141,16 @@ loop {
             assetPhase[asset] := "WAIT_WINDOW"
             assetLastPriceLogTick[asset] := 0
             LogOnceReset(asset)
-            Log(asset " New session (" snapshot.marketTicker ")")
+            Log(asset " New session (" snapshot.marketTicker ", shard " snapshot.exchangeIndex ")")
             kalshiHasUntrackedPosition := false
 
-            if (snapshot.marketTicker != "" && HasExistingPosition(snapshot.marketTicker)) {
+            if (!EnsureKalshiShardFunding(asset, snapshot.exchangeIndex)) {
+                assetPhase[asset] := "FUNDING_FAILED"
+                Log(asset " Shard funding unavailable; skipping this session")
+                continue
+            }
+
+            if (snapshot.marketTicker != "" && HasExistingPosition(snapshot.marketTicker, snapshot.exchangeIndex)) {
                 assetPhase[asset] := "HAS_POSITION"
                 kalshiHasUntrackedPosition := true
             }
@@ -1224,6 +1241,11 @@ loop {
             continue
         }
 
+        if (assetPhase[asset] = "FUNDING_FAILED") {
+            LogOnce(asset, "FUNDING_FAILED", asset " Shard funding failed, waiting for next session")
+            continue
+        }
+
         ; --- Waiting for entry window ---
         if (!inEntryWindow) {
             if (minsLeft <= 0)
@@ -1271,7 +1293,7 @@ loop {
             continue
         }
 
-        existingPositionSize := GetKalshiPositionSize(snapshot.marketTicker, 3)
+        existingPositionSize := GetKalshiPositionSize(snapshot.marketTicker, 3, snapshot.exchangeIndex)
         if (existingPositionSize = "") {
             LogOnce(asset, "POSITION_CHECK_FAILED", asset " Position check unavailable; entry paused")
             continue
@@ -1286,7 +1308,7 @@ loop {
         Log(asset " " side " triggered @ " Fmt(entryPrice) " — placing order")
         buyConfirmed := false
         loop, 4 {
-            if (A_Index > 1 && HasExistingPosition(snapshot.marketTicker)) {
+            if (A_Index > 1 && HasExistingPosition(snapshot.marketTicker, snapshot.exchangeIndex)) {
                 Log(asset " Position detected before retry " A_Index ", skipping")
                 buyConfirmed := true
                 break
@@ -1300,7 +1322,7 @@ loop {
                 Log(asset " Entry retry canceled: " side " price " Fmt(entryPrice) " outside [" Fmt(EntryMin) ", " Fmt(EntryMax) "]")
                 break
             }
-            if BuyPosition(asset, snapshot.marketTicker, side, entryPrice) {
+            if BuyPosition(asset, snapshot.marketTicker, side, entryPrice, snapshot.exchangeIndex) {
                 buyConfirmed := true
                 break
             }
@@ -1327,13 +1349,13 @@ loop {
             confirmedPositionSize := KalshiResultValue(kalshiLastOrderResult, "positionSize", "")
             posSize := accountingReady ? fillSummary.size + 0 : confirmedPositionSize
             if (posSize = "" || posSize <= 0)
-                posSize := GetKalshiPositionSize(snapshot.marketTicker, 3)
+                posSize := GetKalshiPositionSize(snapshot.marketTicker, 3, snapshot.exchangeIndex)
             if (posSize = "" || posSize <= 0)
                 posSize := orderSize + 0
             entryFees := accountingReady ? fillSummary.fees + 0 : 0
             takeProfitTarget := (fillPrice + 0) + (TakeProfitPts + 0)
             initialMark := KalshiSnapshotPositionBid(snapshot, side, posSize)
-            positions[asset] := { side: side, entry: fillPrice + 0, entryFees: entryFees, size: posSize, expectedSize: posSize, accountingReady: accountingReady, entryOrderId: orderId, takeProfitTarget: takeProfitTarget, ticker: snapshot.marketTicker, quarterIndex: CurrentQuarterIndex(), lastMark: initialMark }
+            positions[asset] := { side: side, entry: fillPrice + 0, entryFees: entryFees, size: posSize, expectedSize: posSize, accountingReady: accountingReady, entryOrderId: orderId, takeProfitTarget: takeProfitTarget, ticker: snapshot.marketTicker, exchangeIndex: snapshot.exchangeIndex, quarterIndex: CurrentQuarterIndex(), lastMark: initialMark }
             assetPhase[asset] := "IN_POSITION"
             assetLastPriceLogTick[asset] := 0
             if (accountingReady)
@@ -1543,9 +1565,9 @@ KalshiFormatSize(size) {
     return text
 }
 
-BuyPosition(asset, marketTicker, side, price) {
+BuyPosition(asset, marketTicker, side, price, exchangeIndex := -1) {
     global orderSize
-    return PlaceKalshiOrder("BUY", marketTicker, side, price, orderSize)
+    return PlaceKalshiOrder("BUY", marketTicker, side, price, orderSize, "", exchangeIndex)
 }
 
 SellPosition(asset, side, price, reason, clientOrderId := "") {
@@ -1553,21 +1575,26 @@ SellPosition(asset, side, price, reason, clientOrderId := "") {
     if !IsObject(positions[asset]) || !positions[asset].HasKey("ticker")
         return true
     size := positions[asset].HasKey("size") ? positions[asset].size + 0 : orderSize
-    return PlaceKalshiOrder("SELL", positions[asset].ticker, side, price, size, clientOrderId)
+    exchangeIndex := positions[asset].HasKey("exchangeIndex") ? positions[asset].exchangeIndex : -1
+    return PlaceKalshiOrder("SELL", positions[asset].ticker, side, price, size, clientOrderId, exchangeIndex)
 }
 
-HasExistingPosition(marketTicker) {
-    size := GetKalshiPositionSize(marketTicker)
+HasExistingPosition(marketTicker, exchangeIndex := "") {
+    size := GetKalshiPositionSize(marketTicker, 1, exchangeIndex)
     return (size != "" && size > 0)
 }
 
-GetKalshiPositionSize(marketTicker, maxAttempts := 1) {
+GetKalshiPositionSize(marketTicker, maxAttempts := 1, exchangeIndex := "") {
     if (marketTicker = "")
         return ""
 
+    endpoint := "/trade-api/v2/portfolio/positions?ticker=" marketTicker
+    if (exchangeIndex != "")
+        endpoint .= "&exchange_index=" NormalizeKalshiExchangeIndex(exchangeIndex)
+
     attempt := 1
     while (attempt <= maxAttempts) {
-        res := KalshiSignedRequest("GET", "/trade-api/v2/portfolio/positions?ticker=" marketTicker)
+        res := KalshiSignedRequest("GET", endpoint)
         if IsObject(res) && (res.status = 200) {
             qty := JsonField(res.body, "position_fp")
             if (qty = "")
@@ -1938,34 +1965,44 @@ KalshiHasOpenExposure() {
 }
 
 RunPendingKalshiDailyTargetCheck() {
-    global kalshiDailyTargetCheckPending, Daily_Profit_Target, Daily_Loss_Target
+    global kalshiDailyTargetCheckPending, Daily_Profit_Target, Daily_Loss_Target, kalshiDailyStartBalance, kalshiDailyLastBalance, kalshiDailyBalanceLastAttemptTick
     if (!kalshiDailyTargetCheckPending || KalshiHasOpenExposure())
         return false
 
-    pnl := ComputeKalshiLivePnl()
-    if (pnl = "") {
-        kalshiDailyTargetCheckPending := false
+    nowTick := A_TickCount
+    if (kalshiDailyBalanceLastAttemptTick > 0 && (nowTick - kalshiDailyBalanceLastAttemptTick) < 2000)
+        return false
+    kalshiDailyBalanceLastAttemptTick := nowTick
+
+    currentBalance := GetKalshiAggregateBalanceDollars(3)
+    if (currentBalance = "" || kalshiDailyStartBalance = "") {
+        LogOnce("ACCOUNT", "DAILY_BALANCE_UNAVAILABLE", "Daily target check waiting for aggregate Kalshi balance")
         return false
     }
 
+    kalshiDailyLastBalance := currentBalance + 0
+    pnl := kalshiDailyLastBalance - (kalshiDailyStartBalance + 0)
+
     kalshiDailyTargetCheckPending := false
+    Log("Daily balance check | start $" FmtMoney(kalshiDailyStartBalance) " | current $" FmtMoney(kalshiDailyLastBalance) " | change " FmtPnl(pnl))
     UpdateKalshiPnlLogStreams()
     if ((Daily_Profit_Target + 0) > 0 && pnl > (Daily_Profit_Target + 0)) {
-        Log("Daily profit target reached | PnL " FmtPnl(pnl) " > " FmtPnl(Daily_Profit_Target) " | stopping bot")
+        Log("Daily profit target reached | aggregate balance change " FmtPnl(pnl) " > " FmtPnl(Daily_Profit_Target) " | stopping bot")
         stopCode()
         return true
     }
     if ((Daily_Loss_Target + 0) < 0 && pnl < (Daily_Loss_Target + 0)) {
-        Log("Daily loss target reached | PnL " FmtPnl(pnl) " < " FmtPnl(Daily_Loss_Target) " | stopping bot")
+        Log("Daily loss target reached | aggregate balance change " FmtPnl(pnl) " < " FmtPnl(Daily_Loss_Target) " | stopping bot")
         stopCode()
         return true
     }
     return false
 }
 
-PlaceKalshiOrder(action, marketTicker, side, price, size, clientOrderId := "") {
+PlaceKalshiOrder(action, marketTicker, side, price, size, clientOrderId := "", exchangeIndex := -1) {
     global enableLiveOrders, kalshiApiKeyId, kalshiPrivateKeyPath, restDelay, entryDiff, exitDiff, kalshiLastOrderResult
-    kalshiLastOrderResult := { action: action, ticker: marketTicker, side: side, apiAction: "", apiSide: "", cents: "", price: "", contractCents: "", fillPrice: "", fillSummary: NewKalshiFillSummary(), positionSize: "", timeInForce: "", size: size, status: "", body: "", orderId: "", clientOrderId: clientOrderId, reason: "not submitted" }
+    exchangeIndex := NormalizeKalshiExchangeIndex(exchangeIndex)
+    kalshiLastOrderResult := { action: action, ticker: marketTicker, exchangeIndex: exchangeIndex, side: side, apiAction: "", apiSide: "", cents: "", price: "", contractCents: "", fillPrice: "", fillSummary: NewKalshiFillSummary(), positionSize: "", timeInForce: "", size: size, status: "", body: "", orderId: "", clientOrderId: clientOrderId, reason: "not submitted" }
 
     if (!enableLiveOrders) {
         kalshiLastOrderResult.reason := "live orders disabled"
@@ -2016,6 +2053,7 @@ PlaceKalshiOrder(action, marketTicker, side, price, size, clientOrderId := "") {
         . """post_only"":false,"
         . """cancel_order_on_pause"":false,"
         . """reduce_only"":" reduceOnly ","
+        . """exchange_index"":" exchangeIndex ","
         . """client_order_id"":""" clientOrderId """"
         . "}"
 
@@ -2088,12 +2126,12 @@ PlaceKalshiOrder(action, marketTicker, side, price, size, clientOrderId := "") {
     ; A GTC entry may be only partly filled. Freeze the executed quantity by
     ; canceling every remaining contract before accepting its cost basis.
     if (isBuy && orderId != "") {
-        remainingBefore := GetKalshiOrderRemainingCount(orderId, remainingQueryOk)
+        remainingBefore := GetKalshiOrderRemainingCount(orderId, remainingQueryOk, exchangeIndex)
         cancelNeeded := !remainingQueryOk || remainingBefore > 0.000001
         if (cancelNeeded) {
-            cancelConfirmed := CancelKalshiOrder(orderId)
+            cancelConfirmed := CancelKalshiOrder(orderId, exchangeIndex)
             Sleep 500
-            remainingAfter := GetKalshiOrderRemainingCount(orderId, remainingAfterQueryOk)
+            remainingAfter := GetKalshiOrderRemainingCount(orderId, remainingAfterQueryOk, exchangeIndex)
             remainderClosed := (remainingAfterQueryOk && remainingAfter <= 0.000001) || cancelConfirmed
             if (!remainderClosed) {
                 kalshiLastOrderResult.fatal := true
@@ -2105,7 +2143,7 @@ PlaceKalshiOrder(action, marketTicker, side, price, size, clientOrderId := "") {
         }
     }
 
-    positionSize := GetKalshiPositionSize(marketTicker, 3)
+    positionSize := GetKalshiPositionSize(marketTicker, 3, exchangeIndex)
     if (positionSize = "") {
         kalshiLastOrderResult.fatal := true
         kalshiLastOrderResult.reason := "position confirmation unavailable"
@@ -2118,7 +2156,7 @@ PlaceKalshiOrder(action, marketTicker, side, price, size, clientOrderId := "") {
         Loop, 3 {
             Log("WARN: " marketTicker " Entry fills reported but position is not visible; retry " A_Index "/3 in 2 seconds")
             Sleep 2000
-            positionSize := GetKalshiPositionSize(marketTicker, 3)
+            positionSize := GetKalshiPositionSize(marketTicker, 3, exchangeIndex)
             if (positionSize != "" && positionSize > 0) {
                 Log(marketTicker " Position verified on retry " A_Index "/3 | size " KalshiFormatSize(positionSize))
                 break
@@ -2224,6 +2262,7 @@ KalshiLastOrderApiSummary() {
     side := KalshiResultValue(kalshiLastOrderResult, "side", "")
     apiSide := KalshiResultValue(kalshiLastOrderResult, "apiSide", "")
     ticker := KalshiResultValue(kalshiLastOrderResult, "ticker", "")
+    exchangeIndex := KalshiResultValue(kalshiLastOrderResult, "exchangeIndex", "")
     cents := KalshiResultValue(kalshiLastOrderResult, "cents", "")
     price := KalshiResultValue(kalshiLastOrderResult, "price", "")
     contractCents := KalshiResultValue(kalshiLastOrderResult, "contractCents", "")
@@ -2242,6 +2281,8 @@ KalshiLastOrderApiSummary() {
         orderText .= " -> " apiSide
     if (ticker != "")
         orderText .= " " ticker
+    if (exchangeIndex != "")
+        orderText .= " shard=" exchangeIndex
     if (price != "")
         orderText .= " @" price
     else if (cents != "")
@@ -2316,20 +2357,209 @@ KalshiCompactLogText(s, maxLen := 160) {
     return s
 }
 
-CancelKalshiOrder(orderId) {
+NormalizeKalshiExchangeIndex(exchangeIndex) {
+    exchangeIndex := Trim(exchangeIndex)
+    if !RegExMatch(exchangeIndex, "^-?\d+$")
+        return -1
+    exchangeIndex += 0
+    return (exchangeIndex >= -1) ? exchangeIndex : -1
+}
+
+KalshiBalanceDollarsFromBody(body) {
+    balanceDollars := JsonField(body, "balance_dollars")
+    if !IsNumericStr(balanceDollars)
+        return ""
+    return balanceDollars + 0
+}
+
+GetKalshiBalanceSnapshot(exchangeIndex := "", maxAttempts := 1) {
+    snapshot := { ok: false, balance: "", status: "", body: "", userMissing: false }
+    endpoint := "/trade-api/v2/portfolio/balance"
+    if (exchangeIndex != "") {
+        exchangeIndex := NormalizeKalshiExchangeIndex(exchangeIndex)
+        if (exchangeIndex < 0)
+            return snapshot
+        endpoint .= "?exchange_index=" exchangeIndex
+    }
+
+    attempt := 1
+    while (attempt <= maxAttempts) {
+        res := KalshiSignedRequest("GET", endpoint)
+        if IsObject(res) {
+            snapshot.status := res.status
+            snapshot.body := res.body
+            if (res.status = 200) {
+                balanceDollars := KalshiBalanceDollarsFromBody(res.body)
+                if (balanceDollars != "") {
+                    snapshot.ok := true
+                    snapshot.balance := balanceDollars + 0
+                    return snapshot
+                }
+            }
+
+            errorCode := JsonField(res.body, "code")
+            if (exchangeIndex != "" && InStr(errorCode, "user_not_found") = 1) {
+                ; A newly introduced shard has no user record until its first transfer.
+                snapshot.ok := true
+                snapshot.balance := 0
+                snapshot.userMissing := true
+                return snapshot
+            }
+        }
+        if (attempt < maxAttempts)
+            Sleep 150
+        attempt++
+    }
+    return snapshot
+}
+
+GetKalshiAggregateBalanceDollars(maxAttempts := 1) {
+    snapshot := GetKalshiBalanceSnapshot("", maxAttempts)
+    return (IsObject(snapshot) && snapshot.ok) ? snapshot.balance + 0 : ""
+}
+
+EnsureKalshiShardFunding(asset, destinationExchangeIndex) {
+    global enableLiveOrders, orderSize, assets, kalshiShardFundingSessionStatus
+    if (!enableLiveOrders)
+        return true
+
+    destinationExchangeIndex := NormalizeKalshiExchangeIndex(destinationExchangeIndex)
+    if (destinationExchangeIndex = 0)
+        return true
+    if (destinationExchangeIndex < 0) {
+        Log("ERROR: " asset " Market did not provide a valid exchange shard; automatic funding skipped")
+        return false
+    }
+
+    fundingSessionKey := destinationExchangeIndex "|" CurrentQuarterIndex()
+    if !IsObject(kalshiShardFundingSessionStatus)
+        kalshiShardFundingSessionStatus := {}
+    if kalshiShardFundingSessionStatus.HasKey(fundingSessionKey)
+        return (kalshiShardFundingSessionStatus[fundingSessionKey] = "READY")
+    kalshiShardFundingSessionStatus[fundingSessionKey] := "PENDING"
+
+    ; Reserve the $1 maximum payout per contract for every enabled asset that
+    ; can enter during the same interval. With one asset this is orderSize * $1.
+    enabledAssetCount := IsObject(assets) ? assets.Length() : 1
+    if (enabledAssetCount < 1)
+        enabledAssetCount := 1
+    requiredDollars := (orderSize + 0) * enabledAssetCount
+    destination := GetKalshiBalanceSnapshot(destinationExchangeIndex, 3)
+    if (!IsObject(destination) || !destination.ok) {
+        kalshiShardFundingSessionStatus[fundingSessionKey] := "FAILED"
+        Log("ERROR: " asset " Could not read shard " destinationExchangeIndex " balance | HTTP " (IsObject(destination) ? destination.status : "no response"))
+        return false
+    }
+
+    currentBalance := destination.balance + 0
+    baseFundingReady := (currentBalance >= (requiredDollars - 0.000001))
+    if (baseFundingReady) {
+        ; A sufficient balance may belong to another running agent. Add this
+        ; process's own orderSize * $1 reserve instead of reusing it.
+        transferCenticents := Ceil(((orderSize + 0) * 10000) - 0.000001)
+        transferDollars := transferCenticents / 10000.0
+        confirmationTargetDollars := currentBalance + transferDollars
+        transferReason := "additional agent reserve"
+    } else {
+        ; Preserve the existing behavior when shard 2 is underfunded: transfer
+        ; only the shortfall needed to reach this script's requirement.
+        transferCenticents := Ceil(((requiredDollars - currentBalance) * 10000) - 0.000001)
+        transferDollars := transferCenticents / 10000.0
+        confirmationTargetDollars := requiredDollars
+        transferReason := "shortfall top-up"
+    }
+
+    source := GetKalshiBalanceSnapshot(0, 3)
+    if (!IsObject(source) || !source.ok) {
+        if (baseFundingReady) {
+            kalshiShardFundingSessionStatus[fundingSessionKey] := "READY"
+            Log("WARN: " asset " Could not read source shard 0 for the additional agent reserve; continuing because shard " destinationExchangeIndex " met the base requirement before this optional transfer")
+            return true
+        }
+        kalshiShardFundingSessionStatus[fundingSessionKey] := "FAILED"
+        Log("ERROR: " asset " Could not read source shard 0 balance; automatic funding skipped")
+        return false
+    }
+    if ((source.balance + 0) < (transferDollars - 0.000001)) {
+        if (baseFundingReady) {
+            kalshiShardFundingSessionStatus[fundingSessionKey] := "READY"
+            Log("WARN: " asset " Source shard 0 lacks the $" FmtMoney(transferDollars) " additional agent reserve; continuing because shard " destinationExchangeIndex " met the base requirement before this optional transfer")
+            return true
+        }
+        kalshiShardFundingSessionStatus[fundingSessionKey] := "FAILED"
+        Log("ERROR: " asset " Shard top-up needs $" FmtMoney(transferDollars) " from shard 0 but only $" FmtMoney(source.balance) " is available")
+        return false
+    }
+
+    payload := "{"
+        . """source"":""event_contract"","
+        . """destination"":""event_contract"","
+        . """amount"":" transferCenticents ","
+        . """source_exchange_shard"":0,"
+        . """destination_exchange_shard"":" destinationExchangeIndex ","
+        . """source_subaccount"":0,"
+        . """destination_subaccount"":0"
+        . "}"
+
+    res := KalshiSignedRequest("POST", "/trade-api/v2/portfolio/intra_exchange_instance_transfer", payload)
+    responseAmbiguous := !IsObject(res) || res.status >= 500
+    if (!responseAmbiguous && res.status != 200) {
+        if (baseFundingReady) {
+            kalshiShardFundingSessionStatus[fundingSessionKey] := "READY"
+            Log("WARN: " asset " Additional agent reserve rejected | HTTP " res.status " " KalshiApiMessage(res.body) " | continuing because shard " destinationExchangeIndex " met the base requirement before this optional transfer")
+            return true
+        }
+        kalshiShardFundingSessionStatus[fundingSessionKey] := "FAILED"
+        Log("ERROR: " asset " Shard " destinationExchangeIndex " top-up rejected | HTTP " res.status " " KalshiApiMessage(res.body))
+        return false
+    }
+
+    if (responseAmbiguous) {
+        Log("WARN: " asset " Shard top-up response was ambiguous; checking destination balance before allowing orders")
+    } else {
+        transferId := JsonField(res.body, "transfer_id")
+        Log(asset " Shard " destinationExchangeIndex " " transferReason " requested | $" FmtMoney(transferDollars) " | transfer_id=" KalshiShortLogText(transferId, 28))
+    }
+
+    ; Transfers are asynchronous. A required shortfall must be confirmed. An
+    ; optional extra reserve is best-effort because the base balance was ready.
+    Loop, 20 {
+        Sleep 500
+        destination := GetKalshiBalanceSnapshot(destinationExchangeIndex, 1)
+        if (IsObject(destination) && destination.ok && (destination.balance + 0) >= (confirmationTargetDollars - 0.000001)) {
+            kalshiShardFundingSessionStatus[fundingSessionKey] := "READY"
+            Log(asset " Shard " destinationExchangeIndex " funding confirmed | $" FmtMoney(destination.balance) " available")
+            return true
+        }
+    }
+
+    if (baseFundingReady) {
+        kalshiShardFundingSessionStatus[fundingSessionKey] := "READY"
+        Log("WARN: " asset " Additional agent reserve was not confirmed within 10 seconds; continuing because shard " destinationExchangeIndex " met the base requirement before this optional transfer. Order placement will report if balance is no longer sufficient.")
+        return true
+    }
+
+    kalshiShardFundingSessionStatus[fundingSessionKey] := "FAILED"
+    Log("ERROR: " asset " Shard " destinationExchangeIndex " top-up was not confirmed within 10 seconds; skipping this session")
+    return false
+}
+
+CancelKalshiOrder(orderId, exchangeIndex := -1) {
     if (orderId = "")
         return false
-    res := KalshiSignedRequest("DELETE", "/trade-api/v2/portfolio/events/orders/" orderId)
+    exchangeIndex := NormalizeKalshiExchangeIndex(exchangeIndex)
+    res := KalshiSignedRequest("DELETE", "/trade-api/v2/portfolio/events/orders/" orderId "?exchange_index=" exchangeIndex)
     return IsObject(res) && (res.status = 200 || res.status = 204)
 }
 
-GetKalshiOrderRemainingCount(orderId, ByRef queryOk) {
+GetKalshiOrderRemainingCount(orderId, ByRef queryOk, exchangeIndex := -1) {
     queryOk := false
     if (orderId = "")
         return ""
 
     ; Kalshi's read endpoint still uses /portfolio/orders for V2-created orders.
-    res := KalshiSignedRequest("GET", "/trade-api/v2/portfolio/orders/" orderId)
+    exchangeIndex := NormalizeKalshiExchangeIndex(exchangeIndex)
+    res := KalshiSignedRequest("GET", "/trade-api/v2/portfolio/orders/" orderId "?exchange_index=" exchangeIndex)
     if !IsObject(res) || (res.status != 200)
         return ""
 
@@ -2372,7 +2602,7 @@ LoadKalshiCredentialsFromFiles() {
 }
 
 StartupCredentialCheck() {
-    global enableLiveOrders, kalshiApiKeyId, kalshiPrivateKeyPath, kalshiSignerPath
+    global enableLiveOrders, kalshiApiKeyId, kalshiPrivateKeyPath, kalshiSignerPath, kalshiDailyStartBalance, kalshiDailyLastBalance
 
     apiReady := (kalshiApiKeyId != "")
     keyReady := (kalshiPrivateKeyPath != "" && FileExist(kalshiPrivateKeyPath))
@@ -2382,7 +2612,15 @@ StartupCredentialCheck() {
     if (apiReady && keyReady && signerReady) {
         res := KalshiSignedRequest("GET", "/trade-api/v2/portfolio/balance")
         if IsObject(res) && (res.status = 200) {
-            Log("Credentials processed successfully")
+            aggregateBalance := KalshiBalanceDollarsFromBody(res.body)
+            if (aggregateBalance = "") {
+                Log("ERROR: Credentials worked, but aggregate Kalshi balance could not be read. Daily safety limits cannot be initialized.")
+                stopCode()
+                return
+            }
+            kalshiDailyStartBalance := aggregateBalance + 0
+            kalshiDailyLastBalance := aggregateBalance + 0
+            Log("Credentials processed successfully | aggregate balance $" FmtMoney(aggregateBalance) " | daily baseline set")
             return
         }
         if IsObject(res) && (res.status = 401 || res.status = 403) {
@@ -2675,6 +2913,7 @@ GetKalshiMarketSnapshot(asset, maxRetries := 4) {
 
         if (body != "") {
             marketTicker := GetFirstNonEmptyJsonField(body, ["ticker"])
+            exchangeIndex := GetFirstNonEmptyJsonField(body, ["exchange_index"])
             yesPrice := GetKalshiDollarPrice(body, "yes_ask_dollars", "yes_ask")
             noPrice  := GetKalshiDollarPrice(body, "no_ask_dollars", "no_ask")
             yesBidPrice := GetKalshiDollarPrice(body, "yes_bid_dollars", "yes_bid")
@@ -2705,6 +2944,7 @@ GetKalshiMarketSnapshot(asset, maxRetries := 4) {
                 obj.minutesLeft := minsLeft
                 obj.closeTime := closeIso
                 obj.marketTicker := marketTicker
+                obj.exchangeIndex := NormalizeKalshiExchangeIndex(exchangeIndex)
                 assetSnapshotCache[asset] := obj
                 assetMarketRefreshTick[asset] := nowTick
                 if (RefreshKalshiBestAsks(obj) || (obj.up != "" && obj.down != ""))
