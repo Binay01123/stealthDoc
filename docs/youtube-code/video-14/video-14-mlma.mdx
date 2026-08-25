@@ -966,7 +966,6 @@ Delta := 0                   ; min |open15m - price| required alongside EntryRan
 assets := ["BTC"]            ; Options ["ETH"] ,["SOL"] ,["XRP"] , ["HYPE"] , ["BNB"] , ["DOGE"]
 orderSize := 1               ; number of contracts for trade
 Pings := 0                   ; one-second stop-loss confirmation checks; 0 exits immediately
-
 ;=================
 ;DAILY TARGETS
 ;=================
@@ -2116,8 +2115,15 @@ PlaceKalshiOrder(action, marketTicker, side, price, size, clientOrderId := "") {
     }
     responseFillSummary := kalshiLastOrderResult.fillSummary
     if (isBuy && positionSize <= 0 && IsObject(responseFillSummary) && responseFillSummary.size > 0) {
-        Sleep 500
-        positionSize := GetKalshiPositionSize(marketTicker, 5)
+        Loop, 3 {
+            Log("WARN: " marketTicker " Entry fills reported but position is not visible; retry " A_Index "/3 in 2 seconds")
+            Sleep 2000
+            positionSize := GetKalshiPositionSize(marketTicker, 3)
+            if (positionSize != "" && positionSize > 0) {
+                Log(marketTicker " Position verified on retry " A_Index "/3 | size " KalshiFormatSize(positionSize))
+                break
+            }
+        }
         if (positionSize = "" || positionSize <= 0) {
             kalshiLastOrderResult.fatal := true
             kalshiLastOrderResult.reason := "reported entry fills not visible in position"
@@ -2854,4 +2860,5 @@ IsoUtcToAhk(iso) {
         return ""
     return m1 m2 m3 m4 m5 m6
 }
+
 ```
