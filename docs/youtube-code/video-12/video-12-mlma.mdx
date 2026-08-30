@@ -50,7 +50,8 @@ priceTrackerSnapshotCache := {}
 priceTrackerMarketRefreshTick := {}
 priceTrackerPriceCache := {}
 priceTrackerPriceRefreshTick := {}
-priceTrackerOutputDir := A_ScriptDir "\Training-Data"
+priceTrackerRootDir := PriceTrackerResolveRootDir()
+priceTrackerOutputDir := priceTrackerRootDir "\Training-Data"
 priceTrackerDashboardFile := priceTrackerOutputDir "\dashboard.html"
 priceTrackerOutputFile := ""
 priceTrackerDataIndexFile := priceTrackerOutputDir "\price-data-index.json"
@@ -67,6 +68,7 @@ marketRefreshMs := 5000
 priceRefreshMs := 1500
 
 Log("making training data space")
+Log("training data path | " priceTrackerOutputDir)
 if !PriceTrackerEnsureOutputFiles()
     ExitApp
 
@@ -86,6 +88,23 @@ Log("recording in progress.....")
 loop {
     Sleep %pollIntervalMs%
     PriceTrackerWriteRow(assets)
+}
+
+PriceTrackerResolveRootDir() {
+    ; Reactions run through lib\AutoHotkey.dll, where A_ScriptDir points at
+    ; lib rather than the directory containing Nightshark.exe.
+    if FileExist(A_WorkingDir "\Nightshark.exe")
+        return A_WorkingDir
+    if FileExist(A_ScriptDir "\Nightshark.exe")
+        return A_ScriptDir
+
+    SplitPath, A_ScriptDir, , scriptParentDir
+    if (scriptParentDir != "" && FileExist(scriptParentDir "\Nightshark.exe"))
+        return scriptParentDir
+
+    ; NightShark starts reaction processes with its application directory as
+    ; the working directory, so this remains the safest fallback.
+    return A_WorkingDir
 }
 
 PriceTrackerEnsureOutputFiles() {
@@ -829,7 +848,10 @@ PriceTrackerWriteServerScript(serverFile) {
 PriceTrackerStartDashboardServer() {
     global priceTrackerOutputDir, priceTrackerServerFile, priceTrackerServerPort, priceTrackerDashboardUrl
 
-    PriceTrackerStopExistingDashboardServer()
+    if !PriceTrackerStopExistingDashboardServer() {
+        PriceTrackerLogServerEvent("Dashboard restart aborted because port " . priceTrackerServerPort . " could not be released.")
+        return false
+    }
     command := "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command Start-Process -WindowStyle Hidden -FilePath powershell.exe -ArgumentList " . PriceTrackerPowerShellArgumentList("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", priceTrackerServerFile, "-Root", priceTrackerOutputDir, "-Port", priceTrackerServerPort)
     PriceTrackerLogServerEvent("Launch requested via RunCMD.")
     launchOutput := PriceTrackerRunCMD(command, priceTrackerOutputDir)
@@ -861,12 +883,120 @@ PriceTrackerStartDashboardServer() {
 PriceTrackerStopExistingDashboardServer() {
     global priceTrackerOutputDir, priceTrackerServerPort
 
-    stopScript := "$port=" priceTrackerServerPort "; $cmd=Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue; if ($cmd) { $connections=@(Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $port -State Listen -ErrorAction SilentlyContinue); foreach ($c in $connections) { $proc=Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue; if ($proc -and ($proc.ProcessName -like 'powershell*' -or $proc.ProcessName -eq 'pwsh')) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } } }"
-    stopCommand := "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command " . PriceTrackerQuoteForCmd(stopScript)
-    RunWait, %stopCommand%, %priceTrackerOutputDir%, Hide UseErrorLevel
-    if ErrorLevel
-        PriceTrackerLogServerEvent("Existing dashboard server cleanup returned ErrorLevel " . ErrorLevel)
-    Sleep 500
+    ownerPids := PriceTrackerPortListenerPids(priceTrackerServerPort)
+    if (ownerPids.Count() = 0) {
+        PriceTrackerLogServerEvent("Port " . priceTrackerServerPort . " is free; no existing server to stop.")
+        return true
+    }
+
+    pidList := PriceTrackerPidList(ownerPids)
+    Log("dashboard port " priceTrackerServerPort " already in use | stopping PID(s) " pidList)
+    PriceTrackerLogServerEvent("Port " . priceTrackerServerPort . " is already in use by PID(s) " . pidList . "; stopping them before restart.")
+
+    ; .NET HttpListener is backed by Windows HTTP.sys, so netstat reports its
+    ; owner as the kernel System process (PID 4). Stop the PowerShell process
+    ; hosting our server.ps1 instead; PID 4 itself must never be terminated.
+    if ownerPids.HasKey(4) {
+        dashboardPids := PriceTrackerStopHttpListenerDashboardProcesses(priceTrackerServerPort)
+        if (dashboardPids.Count() > 0) {
+            dashboardPidList := PriceTrackerPidList(dashboardPids)
+            Log("dashboard HTTP listener found | stopped PowerShell PID(s) " dashboardPidList)
+            PriceTrackerLogServerEvent("Stopped dashboard PowerShell PID(s) " . dashboardPidList . " behind HTTP.sys PID 4.")
+            Sleep 500
+            ownerPids := PriceTrackerPortListenerPids(priceTrackerServerPort)
+            if (ownerPids.Count() = 0) {
+                Log("dashboard port " priceTrackerServerPort " released | restarting server")
+                PriceTrackerLogServerEvent("Port " . priceTrackerServerPort . " released successfully after stopping the HTTP.sys dashboard host.")
+                return true
+            }
+        }
+    }
+
+    for pid, _ in ownerPids {
+        if ((pid + 0) = 4) {
+            PriceTrackerLogServerEvent("Port " . priceTrackerServerPort . " is still registered through Windows HTTP.sys (PID 4); the System process was not terminated.")
+            continue
+        }
+        if ((pid + 0) = A_Pid) {
+            Log("ERROR: dashboard port " priceTrackerServerPort " is owned by the current NightShark process and cannot be restarted safely")
+            continue
+        }
+
+        killOutput := PriceTrackerRunCMD("taskkill.exe /PID " . (pid + 0) . " /F", priceTrackerOutputDir)
+        if (Trim(killOutput) != "")
+            PriceTrackerLogServerEvent("taskkill PID " . pid . ": " . Trim(killOutput))
+    }
+
+    ; taskkill can return before Windows has fully released the listener.
+    Loop, 25 {
+        Sleep 200
+        remainingPids := PriceTrackerPortListenerPids(priceTrackerServerPort)
+        if (remainingPids.Count() = 0) {
+            Log("dashboard port " priceTrackerServerPort " released | restarting server")
+            PriceTrackerLogServerEvent("Port " . priceTrackerServerPort . " released successfully.")
+            return true
+        }
+    }
+
+    remainingPids := PriceTrackerPortListenerPids(priceTrackerServerPort)
+    remainingList := PriceTrackerPidList(remainingPids)
+    Log("ERROR: dashboard port " priceTrackerServerPort " is still in use by PID(s) " remainingList)
+    PriceTrackerLogServerEvent("Port " . priceTrackerServerPort . " could not be released; remaining PID(s): " . remainingList)
+    return false
+}
+
+PriceTrackerStopHttpListenerDashboardProcesses(port) {
+    stoppedPids := {}
+    try {
+        wmi := ComObjGet("winmgmts:{impersonationLevel=impersonate}!\\.\root\cimv2")
+        query := "SELECT ProcessId, Name, CommandLine FROM Win32_Process WHERE Name='powershell.exe' OR Name='pwsh.exe'"
+        processes := wmi.ExecQuery(query)
+        for process in processes {
+            commandLine := process.CommandLine . ""
+            StringLower, commandLower, commandLine
+            if (!InStr(commandLower, "server.ps1") || !InStr(commandLower, "-port " port))
+                continue
+
+            pid := process.ProcessId + 0
+            if (pid <= 0 || pid = A_Pid)
+                continue
+            terminateResult := process.Terminate()
+            if (terminateResult = 0)
+                stoppedPids[pid] := true
+            else
+                PriceTrackerLogServerEvent("Could not stop dashboard PowerShell PID " . pid . "; WMI returned " . terminateResult . ".")
+        }
+    } catch e {
+        PriceTrackerLogServerEvent("Could not inspect dashboard PowerShell processes through WMI: " . e.Message)
+    }
+    return stoppedPids
+}
+
+PriceTrackerPortListenerPids(port) {
+    global priceTrackerOutputDir
+    pids := {}
+    output := PriceTrackerRunCMD("netstat.exe -ano -p TCP", priceTrackerOutputDir)
+
+    Loop, Parse, output, `n, `r
+    {
+        line := Trim(A_LoopField)
+        if !RegExMatch(line, "i)^TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$", m)
+            continue
+        if ((m1 + 0) != (port + 0) || (m2 + 0) <= 0)
+            continue
+        pids[m2 + 0] := true
+    }
+    return pids
+}
+
+PriceTrackerPidList(pids) {
+    text := ""
+    for pid, _ in pids {
+        if (text != "")
+            text .= ", "
+        text .= pid
+    }
+    return (text != "") ? text : "unknown"
 }
 
 PriceTrackerOpenDashboard() {
@@ -952,7 +1082,8 @@ PriceTrackerPowerShellArgumentList(args*) {
 }
 
 PriceTrackerWriteEmbeddedDashboard(dashboardFile) {
-    sourceDashboardFile := A_ScriptDir "\dashboard.html"
+    global priceTrackerRootDir
+    sourceDashboardFile := priceTrackerRootDir "\dashboard.html"
     if (FileExist(sourceDashboardFile) && sourceDashboardFile != dashboardFile) {
         FileRead, dashboardHtml, %sourceDashboardFile%
         if (!ErrorLevel && dashboardHtml != "") {
@@ -1105,9 +1236,14 @@ PriceTrackerShardInfo(now := "") {
 }
 
 PriceTrackerShardHourLabel(stamp) {
-    FormatTime, hour12, %stamp%, h
-    FormatTime, ampm, %stamp%, tt
-    StringUpper, ampm, ampm
+    ; Build AM/PM ourselves. FormatTime's tt token is localized and can create
+    ; filenames that the data-index parser cannot recognize on some systems.
+    FormatTime, hour24, %stamp%, H
+    hour24 += 0
+    ampm := (hour24 >= 12) ? "PM" : "AM"
+    hour12 := Mod(hour24, 12)
+    if (hour12 = 0)
+        hour12 := 12
     return hour12 . ampm
 }
 
@@ -1119,6 +1255,7 @@ PriceTrackerAhkTimestampLabel(stamp) {
 PriceTrackerWriteDataIndex() {
     global priceTrackerOutputDir, priceTrackerDataIndexFile, priceTrackerCurrentShardFile, priceTrackerShardHours
 
+    currentShard := PriceTrackerShardInfo()
     FormatTime, updatedAt, %A_Now%, yyyy-MM-dd HH:mm:ss
     json := "{"
         . """version"":1,"
@@ -1127,36 +1264,85 @@ PriceTrackerWriteDataIndex() {
         . """shards"":["
 
     first := true
+    entryCount := 0
     loopPattern := priceTrackerOutputDir . "\price-data-*.jsonl"
     Loop, Files, %loopPattern%, F
     {
         fileName := A_LoopFileName
-        if !RegExMatch(fileName, "^price-data-(\d{4})-(\d{2})-(\d{2})-(\d{1,2})(AM|PM)-(\d{1,2})(AM|PM)\.jsonl$", m)
-            continue
+        if (IsObject(currentShard) && fileName = currentShard.fileName) {
+            startLabel := currentShard.start
+            endLabel := currentShard.end
+        } else {
+            if !RegExMatch(fileName, "^price-data-(\d{4})-(\d{2})-(\d{2})-(\d{1,2})(AM|PM)-(\d{1,2})(AM|PM)\.jsonl$", m)
+                continue
 
-        startHour := PriceTrackerHour12To24(m4, m5)
-        startStamp := m1 . m2 . m3 . Format("{:02}", startHour) . "0000"
-        endStamp := startStamp
-        EnvAdd, endStamp, %priceTrackerShardHours%, Hours
+            startHour := PriceTrackerHour12To24(m4, m5)
+            startStamp := m1 . m2 . m3 . Format("{:02}", startHour) . "0000"
+            endStamp := startStamp
+            EnvAdd, endStamp, %priceTrackerShardHours%, Hours
+            startLabel := PriceTrackerAhkTimestampLabel(startStamp)
+            endLabel := PriceTrackerAhkTimestampLabel(endStamp)
+        }
         FileGetSize, fileSize, %A_LoopFileFullPath%
         activeText := (A_LoopFileFullPath = priceTrackerCurrentShardFile) ? "true" : "false"
 
         if (!first)
             json .= ","
         first := false
+        entryCount++
         json .= "{"
             . """file"":" PriceTrackerJsonString(fileName) ","
-            . """start"":" PriceTrackerJsonString(PriceTrackerAhkTimestampLabel(startStamp)) ","
-            . """end"":" PriceTrackerJsonString(PriceTrackerAhkTimestampLabel(endStamp)) ","
+            . """start"":" PriceTrackerJsonString(startLabel) ","
+            . """end"":" PriceTrackerJsonString(endLabel) ","
             . """bytes"":" (fileSize + 0) ","
             . """active"":" activeText
             . "}"
     }
 
+    ; Do not silently publish an empty index. The current shard is already
+    ; known, so include it directly if directory enumeration missed it.
+    if (entryCount = 0 && IsObject(currentShard) && FileExist(currentShard.path)) {
+        FileGetSize, fileSize, % currentShard.path
+        json .= "{"
+            . """file"":" PriceTrackerJsonString(currentShard.fileName) ","
+            . """start"":" PriceTrackerJsonString(currentShard.start) ","
+            . """end"":" PriceTrackerJsonString(currentShard.end) ","
+            . """bytes"":" (fileSize + 0) ","
+            . """active"":true"
+            . "}"
+        entryCount := 1
+    }
+
+    if (entryCount = 0) {
+        Log("ERROR: data index has no valid shard files in " priceTrackerOutputDir)
+        return false
+    }
+
     json .= "]}"
-    FileDelete, %priceTrackerDataIndexFile%
-    FileAppend, %json%, %priceTrackerDataIndexFile%
-    return !ErrorLevel
+    if !PriceTrackerReplaceTextFile(priceTrackerDataIndexFile, json) {
+        Log("ERROR: could not publish data index at " priceTrackerDataIndexFile)
+        return false
+    }
+    return true
+}
+
+PriceTrackerReplaceTextFile(targetFile, contents) {
+    tempFile := targetFile ".tmp-" A_Pid "-" A_TickCount
+    FileDelete, %tempFile%
+    FileAppend, %contents%, %tempFile%
+    if ErrorLevel {
+        FileDelete, %tempFile%
+        return false
+    }
+
+    ; Writing first and then replacing prevents the dashboard from observing
+    ; the empty interval produced by FileDelete followed by FileAppend.
+    FileMove, %tempFile%, %targetFile%, 1
+    if ErrorLevel {
+        FileDelete, %tempFile%
+        return false
+    }
+    return true
 }
 
 PriceTrackerHour12To24(hourValue, ampm) {
@@ -1470,5 +1656,6 @@ PriceTrackerIsoUtcToAhk(iso) {
         return ""
     return m1 m2 m3 m4 m5 m6
 }
+
 
 ```
