@@ -181,7 +181,7 @@ loop {
             ns_log_once_reset(asset)
             Log(asset " New LIVE session (" snapshot.marketTicker ", shard " snapshot.exchangeIndex ")")
             LogStream("AI SIGNAL", "n/a")
-            LogStream("POSITION", "SKIP")
+            UpdateAgentPositionLogStream(asset)
             SetKalshiUntrackedPosition(asset, false)
 
             if (!EnsureKalshiShardFunding(asset, snapshot.exchangeIndex)) {
@@ -260,7 +260,7 @@ loop {
             RegisterModelOutcomeAudit(aiDecision.provider, asset, sessionKey, snapshot, aiDecision)
             assetPhase[asset] := "READY_TO_ENTER"
             LogStream("AI SIGNAL", aiDecision.direction)
-            LogStream("POSITION", "SKIP")
+            UpdateAgentPositionLogStream(asset, aiDecision)
         }
 
         aiDecision := ns_ai_cached_decision(asset, sessionKey)
@@ -434,7 +434,7 @@ MarkHeldToResolution(asset) {
     pendingKalshiSettlements[settlementKey] := pos
     Log(asset " LIVE " pos.side " held to resolution | PnL settlement pending")
     positions.Delete(asset)
-    LogStream("POSITION", "SKIP")
+    UpdateAgentPositionLogStream(asset)
     ClearKalshiMarketCache(asset)
     assetPhase[asset] := "SETTLEMENT_PENDING"
 }
@@ -469,7 +469,7 @@ LogMonitoringStream(asset, snapshot, livePrice := "", LiveDelta := "") {
         LogStream("AI SIGNAL", aiDecision.direction)
     else
         LogStream("AI SIGNAL", "n/a")
-    LogStream("POSITION", GetAgentPositionForLogStream(asset))
+    UpdateAgentPositionLogStream(asset, aiDecision)
 }
 
 GetKalshiAverageFillForLogStream() {
@@ -479,14 +479,21 @@ GetKalshiAverageFillForLogStream() {
     return kalshiAverageEntryFillNotional / kalshiAverageEntryFillSize
 }
 
-GetAgentPositionForLogStream(asset) {
+UpdateAgentPositionLogStream(asset, aiDecision := "") {
     global positions
+    positionValue := ""
     if IsObject(positions[asset]) && positions[asset].HasKey("side") {
         side := positions[asset].side
         if (side = "UP" || side = "DOWN")
-            return side
+            positionValue := side
     }
-    return "SKIP"
+    if (positionValue = "" && IsObject(aiDecision) && aiDecision.direction = "SKIP")
+        positionValue := "SKIP"
+
+    if (positionValue = "")
+        LogStreamRemove("POSITION")
+    else
+        LogStream("POSITION", positionValue)
 }
 
 GetCachedKalshiPriceObj(asset) {
@@ -1047,7 +1054,9 @@ UpdateKalshiPnlLogStreams() {
     global kalshiWins, kalshiTradeCount, balanceRefreshMs
     LogStream("LIVE PNL", FmtPnl(ComputeKalshiLivePnl()))
     LogStream("WINS", kalshiWins "/" kalshiTradeCount)
-    ns_ai_refresh_balance_logstream(balanceRefreshMs)
+    availableCredit := ns_ai_refresh_balance_logstream(balanceRefreshMs)
+    if (availableCredit != "")
+        LogStream("CREDITS", availableCredit)
 }
 
 PlaceKalshiOrder(action, marketTicker, side, price, size, clientOrderId := "", exchangeIndex := -1) {
