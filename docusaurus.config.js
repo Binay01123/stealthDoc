@@ -6,6 +6,25 @@
 
 import {themes as prismThemes} from 'prism-react-renderer';
 
+function ahkSourcePlugin() {
+  return {
+    name: 'ahk-source-loader',
+    configureWebpack() {
+      return {
+        module: {
+          rules: [
+            {
+              test: /\.ahk$/i,
+              resourceQuery: /raw/,
+              type: 'asset/source',
+            },
+          ],
+        },
+      };
+    },
+  };
+}
+
 // This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
 
 /** @type {import('@docusaurus/types').Config} */
@@ -92,6 +111,7 @@ const config = {
   ],
 
   plugins: [
+    ahkSourcePlugin,
     [
       '@docusaurus/plugin-client-redirects',
       {
