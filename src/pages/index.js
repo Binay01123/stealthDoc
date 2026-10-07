@@ -8,6 +8,7 @@ import styles from './index.module.css';
 import Shuffle from '@site/src/components/Shuffle';
 import LetterGlitch from '@site/src/components/LetterGlitch';
 import DecryptedText from '@site/src/components/DecryptedText';
+import DownloadNightsharkButton from '@site/src/components/DownloadNightsharkButton';
 import Lottie from 'lottie-react';
 import lottieCtaAnimation from '@site/static/img/lottieflow-cta-05-2-000000-easey.json';
 
@@ -75,18 +76,9 @@ function HomepageHeader() {
             />
             Watch on YouTube
           </Link>
-          <Link
-            className={clsx('button button--primary button--lg', styles.nightsharkButton)}
-            href="https://nightshark.io"
-            target="_blank"
-            rel="noopener noreferrer">
-            <img 
-              src="/img/nightshark-logo.png" 
-              alt="Nightshark" 
-              style={{width: '24px', height: '24px', marginRight: '8px', verticalAlign: 'middle'}} 
-            />
+          <DownloadNightsharkButton className={styles.downloadButton}>
             Download Nightshark
-          </Link>
+          </DownloadNightsharkButton>
         </div>
       </div>
     </header>

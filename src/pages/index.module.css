@@ -61,22 +61,6 @@
   margin-top: 2rem;
 }
 
-.nightsharkButton {
-  background-color: #3b82f6 !important;
-  border-color: #3b82f6 !important;
-  color: white !important;
-  box-shadow: 0 4px 6px rgba(59, 130, 246, 0.3);
-  transition: all 0.2s ease;
-}
-
-.nightsharkButton:hover {
-  background-color: #2563eb !important;
-  border-color: #2563eb !important;
-  color: white !important;
-  transform: translateY(-2px);
-  box-shadow: 0 6px 8px rgba(59, 130, 246, 0.4);
-}
-
 @media screen and (max-width: 996px) {
   .heroBanner {
     padding: 4rem 2rem;
@@ -94,5 +78,9 @@
   .buttons > a {
     width: 100%;
     margin-right: 0 !important;
+  }
+
+  .buttons > .downloadButton {
+    width: 75%;
   }
 }

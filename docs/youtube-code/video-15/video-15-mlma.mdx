@@ -1,7 +1,7 @@
 ---
 id: video-15-kalshi-ai-trading-bot
 title: "Kalshi AI trading bot"
-sidebar_label: "Video 15: Kalshi AI trading bot"
+sidebar_label: "Video 15: Kalshi AI Trading"
 sidebar_position: 16
 slug: /youtube-code/video-15-kalshi-ai-trading-bot
 description: Build a Kalshi AI trading bot in Nightshark with configurable AI models, paper trading, live trading, and daily profit and loss limits.
@@ -10,21 +10,29 @@ keywords: [Kalshi AI trading bot, Kalshi trading bot, AI trading bot, Kalshi pap
 
 import CodeBlock from '@theme/CodeBlock';
 import CredentialCopyList from '@site/src/components/CredentialCopyList';
+import DownloadNightsharkButton from '@site/src/components/DownloadNightsharkButton';
 import paperTradingCode from './Ai-Paper-script.ahk?raw';
 import liveTradingCode from './Ai-Live-script.ahk?raw';
 
-# Kalshi AI trading bot
+# Kalshi AI Trading Bot Guide
 
 This guide shows how to use Nightshark's AI Mode to analyze Kalshi's 15-minute crypto markets and turn each model response into a paper or live trade. Choose the AI model, cost, and instructions in AI Mode, then use the script settings below to control the assets, order size, decision timing, and daily limits.
 
-![Kalshi AI trading bot step-by-step guide](./Kalshi-ai-guide.png)
+
+<div className="video-container">
+  <iframe
+    src="https://www.youtube.com/embed/J3LLhj3MfYA"
+    title="YouTube video player"
+    frameBorder="0"
+    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+    allowFullScreen>
+  </iframe>
+</div>
 
 :::tip Latest Nightshark Version Required
-This guide uses Nightshark's AI Mode and requires the latest Nightshark build.
+This code requires <mark className="text-highlight-yellow"><strong>September 21, 2026 or newer version of Nightshark</strong></mark>. If you downloaded Nightshark before September 21, 2026, you need to re-download it from the website and follow this tutorial.
 
-<a className="btn-nightshark-small" href="https://nightshark.io" target="_blank" rel="noopener noreferrer">
-  <span>Download Latest Nightshark</span>
-</a>
+<DownloadNightsharkButton />
 :::
 
 ## How the bot works
