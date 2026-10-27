@@ -108,6 +108,10 @@ assetPriceCache := {}
 assetPriceRefreshTick := {}
 kalshiLastOrderResult := {}
 kalshiShardFundingSessionStatus := {}
+kalshiShardPendingTransfers := {} ; retained across market changes until reconciled
+kalshiAggregateBalanceSnapshot := ""
+kalshiBalanceNextRequestTick := 0
+kalshiBalanceRetryCount := 0
 pendingModelOutcomeAudits := {}
 modelOutcomeAuditLastCheckTick := {}
 
@@ -176,7 +180,7 @@ loop {
                 continue
             }
             assetSessionQuarter[asset] := sessionKey
-            assetPhase[asset] := "WAIT_AI_WINDOW"
+            assetPhase[asset] := "WAIT_FUNDING"
             assetLastPriceLogTick[asset] := 0
             ns_log_once_reset(asset)
             Log(asset " New LIVE session (" snapshot.marketTicker ", shard " snapshot.exchangeIndex ")")
@@ -184,18 +188,7 @@ loop {
             UpdateAgentPositionLogStream(asset)
             SetKalshiUntrackedPosition(asset, false)
 
-            if (!EnsureKalshiShardFunding(asset, snapshot.exchangeIndex)) {
-                assetPhase[asset] := "FUNDING_FAILED"
-                Log(asset " Shard funding unavailable; skipping this session")
-                continue
-            }
-
-            if (snapshot.marketTicker != "" && HasExistingPosition(snapshot.marketTicker, snapshot.exchangeIndex)) {
-                assetPhase[asset] := "HAS_POSITION"
-                SetKalshiUntrackedPosition(asset, true)
-                Log(asset " Existing position found; no new AI order will be placed this session")
-                continue
-            }
+            continue
         }
 
         if IsObject(positions[asset]) {
@@ -219,7 +212,7 @@ loop {
         }
 
         if (assetPhase[asset] = "FUNDING_FAILED") {
-            ns_log_once(asset, "FUNDING_FAILED", asset " Shard funding failed, waiting for next session")
+            ns_log_once(asset, "FUNDING_FAILED", asset " Funding request rejected; live entry is paused")
             continue
         }
 
@@ -230,6 +223,41 @@ loop {
 
         if (assetPhase[asset] = "SETTLEMENT_PENDING" || assetPhase[asset] = "SESSION_ENDED") {
             ns_log_once(asset, "SESSION_ENDED", asset " Session ended, waiting for the next market")
+            continue
+        }
+
+        if (assetPhase[asset] = "WAIT_FUNDING") {
+            if (minsLeft = "") {
+                ns_log_once(asset, "FUNDING_TIME_MISSING", asset " Waiting for the session clock before funding")
+                continue
+            }
+            if (minsLeft <= 0) {
+                assetPhase[asset] := "SESSION_ENDED"
+                ns_log_once(asset, "FUNDING_WINDOW_ENDED", asset " Market closed while waiting for funding")
+                continue
+            }
+            fundingFailed := false
+            if (!EnsureKalshiShardFunding(asset, snapshot.exchangeIndex, fundingFailed)) {
+                if (fundingFailed)
+                    assetPhase[asset] := "FUNDING_FAILED"
+                continue
+            }
+
+            ; An unavailable position read must not be treated as a flat account.
+            existingPositionSize := GetKalshiPositionSize(snapshot.marketTicker, 1, snapshot.exchangeIndex)
+            if (existingPositionSize = "") {
+                ns_log_once(asset, "FUNDING_POSITION_WAIT", asset " Funding ready; waiting for existing-position check")
+                continue
+            }
+            if (existingPositionSize > 0) {
+                assetPhase[asset] := "HAS_POSITION"
+                SetKalshiUntrackedPosition(asset, true)
+                Log(asset " Existing position found; no new AI order will be placed this session")
+            } else {
+                assetPhase[asset] := "WAIT_AI_WINDOW"
+                Log(asset " Shard funding ready")
+            }
+            ; Refresh the market and session clock before requesting AI analytics.
             continue
         }
 
@@ -1420,27 +1448,49 @@ KalshiBalanceDollarsFromBody(body) {
     return balanceDollars + 0
 }
 
-GetKalshiBalanceSnapshot(exchangeIndex := "", maxAttempts := 1) {
-    snapshot := { ok: false, balance: "", status: "", body: "", userMissing: false }
+GetKalshiBalanceSnapshot(exchangeIndex := "", maxAttempts := 1, forceRefresh := false) {
+    global kalshiAggregateBalanceSnapshot
+    snapshot := { ok: false, balance: "", status: "", body: "", userMissing: false, retryable: true, balances: {} }
     endpoint := "/trade-api/v2/portfolio/balance"
     if (exchangeIndex != "") {
         exchangeIndex := NormalizeKalshiExchangeIndex(exchangeIndex)
-        if (exchangeIndex < 0)
+        if (exchangeIndex < 0) {
+            snapshot.retryable := false
             return snapshot
+        }
         endpoint .= "?exchange_index=" exchangeIndex
+    }
+
+    ; Startup and funding checks share the same short-lived aggregate read.
+    if (!forceRefresh && IsObject(kalshiAggregateBalanceSnapshot) && (A_TickCount - kalshiAggregateBalanceSnapshot.tick) < 1100) {
+        if (exchangeIndex = "")
+            return kalshiAggregateBalanceSnapshot.Clone()
+        if kalshiAggregateBalanceSnapshot.balances.HasKey(exchangeIndex) {
+            snapshot.ok := true
+            snapshot.status := 200
+            snapshot.balance := kalshiAggregateBalanceSnapshot.balances[exchangeIndex]
+            return snapshot
+        }
     }
 
     attempt := 1
     while (attempt <= maxAttempts) {
+        ; KalshiSignedRequest paces every balance GET, including scoped reads.
         res := KalshiSignedRequest("GET", endpoint)
         if IsObject(res) {
             snapshot.status := res.status
             snapshot.body := res.body
+            snapshot.retryable := (res.status = 0 || res.status = 200 || res.status = 408 || res.status = 429 || res.status >= 500)
             if (res.status = 200) {
                 balanceDollars := KalshiBalanceDollarsFromBody(res.body)
                 if (balanceDollars != "") {
                     snapshot.ok := true
                     snapshot.balance := balanceDollars + 0
+                    snapshot.tick := A_TickCount
+                    if (exchangeIndex = "") {
+                        snapshot.balances := KalshiBalanceBreakdown(res.body)
+                        kalshiAggregateBalanceSnapshot := snapshot.Clone()
+                    }
                     return snapshot
                 }
             }
@@ -1452,16 +1502,50 @@ GetKalshiBalanceSnapshot(exchangeIndex := "", maxAttempts := 1) {
                 snapshot.userMissing := true
                 return snapshot
             }
+            if (!snapshot.retryable)
+                break
         }
-        if (attempt < maxAttempts)
-            Sleep 150
+        ; The shared request scheduler supplies spacing and exponential backoff.
         attempt++
     }
     return snapshot
 }
 
-EnsureKalshiShardFunding(asset, destinationExchangeIndex) {
-    global enableLiveOrders, kalshiShardFundingSessionStatus
+KalshiBalanceBreakdown(body) {
+    balances := {}
+    if !RegExMatch(body, """balance_breakdown""\s*:\s*\[([^\]]*)\]", breakdown)
+        return balances
+    pos := 1
+    while (pos := RegExMatch(breakdown1, "\{[^{}]*\}", item, pos)) {
+        exchangeIndex := JsonField(item, "exchange_index")
+        balance := JsonField(item, "balance") ; breakdown balances are dollar strings
+        if (RegExMatch(exchangeIndex, "^\d+$") && IsNumericStr(balance))
+            balances[exchangeIndex + 0] := balance + 0
+        pos += StrLen(item)
+    }
+    return balances
+}
+
+KalshiBalanceForShard(aggregate, exchangeIndex) {
+    if (IsObject(aggregate) && aggregate.ok && aggregate.balances.HasKey(exchangeIndex))
+        return { ok: true, balance: aggregate.balances[exchangeIndex], status: 200 }
+    ; Older responses or an unprovisioned shard may have no breakdown entry.
+    return GetKalshiBalanceSnapshot(exchangeIndex, 1)
+}
+
+KalshiFundingReadFailed(asset, exchangeIndex, snapshot, state, ByRef permanentFailure) {
+    permanentFailure := IsObject(snapshot) && !snapshot.retryable
+    if (permanentFailure)
+        state.status := "FAILED"
+    status := (IsObject(snapshot) && snapshot.status != "") ? snapshot.status : "no response"
+    ns_log_once(asset, "FUNDING_READ_" exchangeIndex "_" status, asset " Balance read " (permanentFailure ? "rejected" : "unavailable; will retry") " | shard " exchangeIndex " | HTTP " status)
+    return false
+}
+
+EnsureKalshiShardFunding(asset, destinationExchangeIndex, ByRef permanentFailure := false) {
+    global enableLiveOrders, kalshiShardFundingSessionStatus, kalshiShardPendingTransfers
+    global kalshiBalanceNextRequestTick, kalshiAggregateBalanceSnapshot
+    permanentFailure := false
     if (!enableLiveOrders)
         return true
 
@@ -1469,80 +1553,185 @@ EnsureKalshiShardFunding(asset, destinationExchangeIndex) {
     if (destinationExchangeIndex = 0)
         return true
     if (destinationExchangeIndex != 2) {
-        Log("ERROR: " asset " Market provided unsupported exchange shard " destinationExchangeIndex "; expected shard 0 or 2")
+        permanentFailure := true
+        ns_log_once(asset, "INVALID_SHARD", "ERROR: " asset " Market provided unsupported exchange shard " destinationExchangeIndex "; expected shard 0 or 2")
         return false
     }
 
     ; Consolidate exchange 0 into exchange 2 only once during this script run.
+    ; A temporary balance error must not permanently cache a failed transfer.
     fundingTransferKey := "0>2"
-    if !IsObject(kalshiShardFundingSessionStatus)
-        kalshiShardFundingSessionStatus := {}
-    if kalshiShardFundingSessionStatus.HasKey(fundingTransferKey)
-        return (kalshiShardFundingSessionStatus[fundingTransferKey] = "READY")
-    kalshiShardFundingSessionStatus[fundingTransferKey] := "PENDING"
-
-    source := GetKalshiBalanceSnapshot(0, 3)
-    if (!IsObject(source) || !source.ok) {
-        kalshiShardFundingSessionStatus[fundingTransferKey] := "FAILED"
-        Log("ERROR: " asset " Could not read exchange 0 balance for the one-time shard 2 transfer")
+    if !kalshiShardFundingSessionStatus.HasKey(fundingTransferKey)
+        kalshiShardFundingSessionStatus[fundingTransferKey] := { status: "WAIT_FUNDING", retryTick: 0 }
+    state := kalshiShardFundingSessionStatus[fundingTransferKey]
+    if (state.status = "READY")
+        return true
+    if (state.status = "FAILED") {
+        permanentFailure := true
         return false
     }
+    if (A_TickCount < state.retryTick)
+        return false
 
-    ; The transfer API uses centicents. Floor the available balance so the
-    ; request never exceeds exchange 0 because of floating-point rounding.
+    ; Defer in the strategy loop instead of blocking other assets during backoff.
+    cacheFresh := IsObject(kalshiAggregateBalanceSnapshot) && (A_TickCount - kalshiAggregateBalanceSnapshot.tick) < 1100
+    if (A_TickCount < kalshiBalanceNextRequestTick && (!cacheFresh || kalshiShardPendingTransfers.HasKey(2)))
+        return false
+    Random, fundingJitter, 0, 500
+    state.retryTick := A_TickCount + 5000 + fundingJitter
+
+    ; Retain the same transfer across asset retries and market/session changes.
+    if kalshiShardPendingTransfers.HasKey(2)
+        return ReconcileKalshiShardTransfer(asset, 2, state, permanentFailure)
+
+    aggregate := GetKalshiBalanceSnapshot("", 1)
+    if (!aggregate.ok)
+        return KalshiFundingReadFailed(asset, "all", aggregate, state, permanentFailure)
+    source := KalshiBalanceForShard(aggregate, 0)
+    if (!source.ok)
+        return KalshiFundingReadFailed(asset, 0, source, state, permanentFailure)
+
+    ; The API uses centicents. Floor to avoid transferring more than is available.
     transferCenticents := Floor(((source.balance + 0) * 10000) + 0.000001)
     if (transferCenticents <= 0) {
-        kalshiShardFundingSessionStatus[fundingTransferKey] := "READY"
+        state.status := "READY"
         return true
     }
     transferDollars := transferCenticents / 10000.0
-
-    destination := GetKalshiBalanceSnapshot(2, 3)
-    if (!IsObject(destination) || !destination.ok) {
-        kalshiShardFundingSessionStatus[fundingTransferKey] := "FAILED"
-        Log("ERROR: " asset " Could not read exchange 2 balance before the one-time transfer")
-        return false
-    }
+    destination := KalshiBalanceForShard(aggregate, 2)
+    if (!destination.ok)
+        return KalshiFundingReadFailed(asset, 2, destination, state, permanentFailure)
     confirmationTargetDollars := (destination.balance + 0) + transferDollars
 
+    clientTransferId := NewKalshiTransferId()
+    if (clientTransferId = "") {
+        state.status := "FAILED"
+        permanentFailure := true
+        Log("ERROR: " asset " Could not create a duplicate-prevention ID for the shard transfer")
+        return false
+    }
     payload := "{"
         . """source"":""event_contract"","
         . """destination"":""event_contract"","
+        . """client_transfer_id"":""" clientTransferId ""","
         . """amount"":" transferCenticents ","
         . """source_exchange_shard"":0,"
         . """destination_exchange_shard"":2,"
         . """source_subaccount"":0,"
         . """destination_subaccount"":0"
         . "}"
+    pending := { transferId: "", clientTransferId: clientTransferId, payload: payload, historyCursor: "", attempted: false, transferDollars: transferDollars, targetDollars: confirmationTargetDollars }
+    ; Store before POST: a timeout may occur after Kalshi accepted the transfer.
+    kalshiShardPendingTransfers[2] := pending
+    return SubmitKalshiShardTransfer(asset, 2, state, pending, permanentFailure)
+}
 
-    res := KalshiSignedRequest("POST", "/trade-api/v2/portfolio/intra_exchange_instance_transfer", payload)
-    responseAmbiguous := !IsObject(res) || res.status >= 500
-    if (!responseAmbiguous && res.status != 200) {
-        kalshiShardFundingSessionStatus[fundingTransferKey] := "FAILED"
-        Log("ERROR: " asset " Exchange 0 -> 2 transfer rejected | HTTP " res.status " " KalshiApiMessage(res.body))
-        return false
+SubmitKalshiShardTransfer(asset, exchangeIndex, state, pending, ByRef permanentFailure) {
+    global kalshiShardPendingTransfers
+    wasAttempted := pending.attempted
+    pending.attempted := true
+    res := KalshiSignedRequest("POST", "/trade-api/v2/portfolio/intra_exchange_instance_transfer", pending.payload)
+    if (IsObject(res) && res.status = 200) {
+        pending.transferId := JsonField(res.body, "transfer_id")
+        Log(asset " One-time exchange 0 -> 2 transfer requested | $" FmtMoney(pending.transferDollars) " | client_transfer_id=" pending.clientTransferId " | transfer_id=" pending.transferId)
+    } else if (IsObject(res) && (res.status = 401 || res.status = 403)) {
+        if (!wasAttempted)
+            kalshiShardPendingTransfers.Delete(exchangeIndex)
+        state.status := "FAILED"
+        permanentFailure := true
+        Log("ERROR: " asset " Exchange 0 -> 2 transfer unauthorized | HTTP " res.status " " KalshiApiMessage(res.body))
+    } else if (!IsObject(res) || res.status = 0 || res.status = 408 || res.status = 409 || res.status >= 500 || wasAttempted) {
+        ; Any retry keeps the exact payload and client ID, including after a 409.
+        ns_log_once(asset, "TRANSFER_AMBIGUOUS_" pending.clientTransferId, asset " Transfer outcome pending; will reconcile before another transfer")
+    } else {
+        ; A definitive first rejection did not create a transfer.
+        kalshiShardPendingTransfers.Delete(exchangeIndex)
+        permanentFailure := (res.status != 429 && !InStr(JsonField(res.body, "code"), "insufficient"))
+        if (permanentFailure)
+            state.status := "FAILED"
+        ns_log_once(asset, "TRANSFER_REJECTED_" res.status, asset " Exchange 0 -> 2 transfer rejected | HTTP " res.status " " KalshiApiMessage(res.body) (permanentFailure ? "" : " | will retry"))
     }
+    return false
+}
 
-    if (responseAmbiguous)
-        Log("WARN: " asset " Exchange 0 -> 2 transfer response was ambiguous; checking exchange 2 balance")
-    else {
-        transferId := JsonField(res.body, "transfer_id")
-        Log(asset " One-time exchange 0 -> 2 balance transfer requested | $" FmtMoney(transferDollars) " | transfer_id=" KalshiShortLogText(transferId, 28))
-    }
+ReconcileKalshiShardTransfer(asset, exchangeIndex, state, ByRef permanentFailure) {
+    global kalshiShardPendingTransfers
+    pending := kalshiShardPendingTransfers[exchangeIndex]
+    aggregate := GetKalshiBalanceSnapshot("", 1, true)
+    if (!aggregate.ok)
+        return KalshiFundingReadFailed(asset, "all", aggregate, state, permanentFailure)
+    destination := KalshiBalanceForShard(aggregate, exchangeIndex)
+    if (!destination.ok)
+        return KalshiFundingReadFailed(asset, exchangeIndex, destination, state, permanentFailure)
 
-    Loop, 20 {
-        Sleep 500
-        destination := GetKalshiBalanceSnapshot(2, 1)
-        if (IsObject(destination) && destination.ok && (destination.balance + 0) >= (confirmationTargetDollars - 0.000001)) {
-            kalshiShardFundingSessionStatus[fundingTransferKey] := "READY"
-            Log(asset " Exchange 0 -> 2 balance transfer confirmed | $" FmtMoney(destination.balance) " available on exchange 2")
-            return true
+    transferComplete := false
+    historyExhausted := false
+    if (pending.transferId != "") {
+        res := KalshiSignedRequest("GET", "/trade-api/v2/portfolio/intra_exchange_instance_transfers/" KalshiQueryEncode(pending.transferId))
+        if (IsObject(res) && res.status = 200)
+            transferComplete := (JsonField(res.body, "status") = "complete")
+    } else {
+        ; Recover a lost POST response by its client ID. Scan one page per retry.
+        endpoint := "/trade-api/v2/portfolio/intra_exchange_instance_transfers?limit=100"
+        if (pending.historyCursor != "")
+            endpoint .= "&cursor=" KalshiQueryEncode(pending.historyCursor)
+        res := KalshiSignedRequest("GET", endpoint)
+        if (IsObject(res) && res.status = 200) {
+            pos := 1
+            while (pos := RegExMatch(res.body, "\{[^{}]*\}", item, pos)) {
+                if (JsonField(item, "client_transfer_id") = pending.clientTransferId) {
+                    pending.transferId := JsonField(item, "transfer_id")
+                    transferComplete := (JsonField(item, "status") = "complete")
+                    break
+                }
+                pos += StrLen(item)
+            }
+            pending.historyCursor := JsonField(res.body, "cursor")
+            historyExhausted := (pending.transferId = "" && pending.historyCursor = "")
         }
     }
 
-    kalshiShardFundingSessionStatus[fundingTransferKey] := "FAILED"
-    Log("ERROR: " asset " Exchange 0 -> 2 balance transfer was not confirmed within 10 seconds; skipping this session")
+    ; A completed transfer remains one-time even if another bot has spent funds
+    ; before this balance read. Order submission still enforces available funds.
+    if (transferComplete)
+        kalshiShardPendingTransfers.Delete(exchangeIndex)
+    targetReached := (destination.balance + 0) >= (pending.targetDollars - 0.000001)
+    if (transferComplete || targetReached) {
+        state.status := "READY"
+        Log(asset " One-time exchange 0 -> 2 transfer confirmed | $" FmtMoney(destination.balance) " available on exchange 2")
+        return true
+    }
+    if (historyExhausted) {
+        ; Kalshi deduplicates this UUID. Reuse only the exact original request.
+        return SubmitKalshiShardTransfer(asset, exchangeIndex, state, pending, permanentFailure)
+    }
+    ns_log_once(asset, "TRANSFER_PENDING_" pending.clientTransferId, asset " Transfer pending confirmation; will retry without creating another transfer")
     return false
+}
+
+NewKalshiTransferId() {
+    VarSetCapacity(guid, 16, 0)
+    if (DllCall("ole32\CoCreateGuid", "Ptr", &guid) != 0)
+        return ""
+    VarSetCapacity(guidText, 78, 0)
+    if (!DllCall("ole32\StringFromGUID2", "Ptr", &guid, "Ptr", &guidText, "Int", 39))
+        return ""
+    return Trim(StrGet(&guidText, "UTF-16"), "{}")
+}
+
+KalshiScheduleNextBalanceRead(status) {
+    global kalshiBalanceNextRequestTick, kalshiBalanceRetryCount
+    delayMs := 1100
+    if (status = 0 || status = 408 || status = 429 || status >= 500) {
+        kalshiBalanceRetryCount := Min(kalshiBalanceRetryCount + 1, 5)
+        Random, balanceJitter, 0, 250
+        delayMs := (1100 * (2 ** (kalshiBalanceRetryCount - 1))) + balanceJitter
+        if (status = 429)
+            Log("Balance read rate-limited; retrying after " Round(delayMs / 1000.0, 2) " seconds")
+    } else {
+        kalshiBalanceRetryCount := 0
+    }
+    kalshiBalanceNextRequestTick := A_TickCount + delayMs
 }
 
 CancelKalshiOrder(orderId, exchangeIndex := -1) {
@@ -1608,22 +1797,16 @@ StartupCredentialCheck() {
     signerReady := InStr(signerOut, "NightShark Signer")
 
     if (apiReady && keyReady && signerReady) {
-        res := KalshiSignedRequest("GET", "/trade-api/v2/portfolio/balance")
-        if IsObject(res) && (res.status = 200) {
-            aggregateBalance := KalshiBalanceDollarsFromBody(res.body)
-            if (aggregateBalance = "")
-                Log("Credentials processed successfully")
-            else
-                Log("Credentials processed successfully | aggregate balance $" FmtMoney(aggregateBalance))
+        snapshot := GetKalshiBalanceSnapshot("", 3, true)
+        if (snapshot.ok) {
+            Log("Credentials processed successfully | aggregate balance $" FmtMoney(snapshot.balance))
             return true
         }
-        if IsObject(res) && (res.status = 401 || res.status = 403) {
-            Log("ERROR: API key or private key is incorrect (HTTP " res.status ")")
+        if (snapshot.status = 401 || snapshot.status = 403) {
+            Log("ERROR: API key or private key is incorrect (HTTP " snapshot.status ")")
             Log("Please fix your API key / private key and restart.")
         } else {
-            Log("WARNING: Could not verify credentials (HTTP " (IsObject(res) ? res.status : "no response") ")")
-            Log("Please paste below link in browser to watch fix video")
-            Log("https://youtu.be/Es0vvpzyND4")
+            Log("ERROR: Startup balance unavailable after retries | HTTP " snapshot.status " | stopping before live trading")
         }
         stopCode()
         return false
@@ -1671,7 +1854,17 @@ JsonUnescape(s) {
 }
 
 KalshiSignedRequest(method, endpointPath, bodyJson := "") {
-    global kalshiApiBase, kalshiApiKeyId
+    global kalshiApiBase, kalshiApiKeyId, kalshiBalanceNextRequestTick, kalshiAggregateBalanceSnapshot
+    isBalanceRead := (method = "GET" && RegExMatch(endpointPath, "^/trade-api/v2/portfolio/balance(?:\?|$)"))
+    if (isBalanceRead) {
+        waitMs := kalshiBalanceNextRequestTick - A_TickCount
+        if (waitMs > 0)
+            Sleep %waitMs%
+        kalshiAggregateBalanceSnapshot := ""
+    } else if (method != "GET") {
+        kalshiAggregateBalanceSnapshot := ""
+    }
+    ; Sign after waiting, so the timestamp stays fresh during a rate-limit backoff.
     timestamp := CurrentTimeMillis()
     signPath := endpointPath
     if InStr(signPath, "?")
@@ -1704,10 +1897,15 @@ KalshiSignedRequest(method, endpointPath, bodyJson := "") {
             http.Send()
     } catch e {
         httpSignedObj := ""
+        if (isBalanceRead)
+            KalshiScheduleNextBalanceRead(0)
         return false
     }
 
-    return { status: http.Status, body: http.ResponseText }
+    res := { status: http.Status, body: http.ResponseText }
+    if (isBalanceRead)
+        KalshiScheduleNextBalanceRead(res.status)
+    return res
 }
 
 SignKalshiMessage(message) {
